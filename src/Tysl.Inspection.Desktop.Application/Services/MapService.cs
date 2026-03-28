@@ -26,6 +26,12 @@ public sealed class MapService(
     private static string BuildSqliteMessage(Exception exception)
     {
         var message = exception.Message;
+        if (message.Contains("unable to open database file", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("cannot open", StringComparison.OrdinalIgnoreCase))
+        {
+            return "本地 SQLite 文件不存在或无法打开，请先检查数据库路径。";
+        }
+
         if (message.Contains("no such table", StringComparison.OrdinalIgnoreCase)
             || message.Contains("Device", StringComparison.OrdinalIgnoreCase))
         {

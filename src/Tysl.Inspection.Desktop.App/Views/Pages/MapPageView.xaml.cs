@@ -97,6 +97,16 @@ public partial class MapPageView : System.Windows.Controls.UserControl
             {
                 pageReady = true;
                 TrySendBootstrap();
+                return;
+            }
+
+            if (messageType is "map-error")
+            {
+                var message = document.RootElement.TryGetProperty("message", out var messageElement)
+                    ? messageElement.GetString()
+                    : null;
+
+                viewModel?.ReportMapRenderFailure(message ?? "地图脚本加载失败。");
             }
         }
         catch

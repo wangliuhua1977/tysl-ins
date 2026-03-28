@@ -22,7 +22,7 @@ public sealed partial class MapPageViewModel(
     private bool hasLoaded;
 
     [ObservableProperty]
-    private string statusText = "正在加载本地点位...";
+    private string statusText = "正在加载本地点位数据...";
 
     [ObservableProperty]
     private int renderedCount;
@@ -60,9 +60,16 @@ public sealed partial class MapPageViewModel(
         MapBootstrapJson = BuildBootstrapJson(Array.Empty<InspectionDevice>(), StatusText, false, false);
     }
 
+    public void ReportMapRenderFailure(string message)
+    {
+        logger.LogError("Map page render failed: {Message}", message);
+        StatusText = $"地图渲染失败：{message}";
+    }
+
     private void Apply(MapLoadResult result)
     {
         var devices = result.Devices;
+        var totalCount = devices.Count;
         RenderedCount = devices.Count(IsRenderable);
         OnlineCount = devices.Count(device => device.OnlineStatus == 1);
         OfflineCount = devices.Count(device => device.OnlineStatus == 0);
@@ -71,11 +78,15 @@ public sealed partial class MapPageViewModel(
         var hasMapKey = mapOptions.HasJsKey();
         StatusText = result.Success
             ? hasMapKey
-                ? $"已读取 {devices.Count} 个本地点位，地图已准备就绪。"
-                : $"已读取 {devices.Count} 个本地点位，但缺少高德地图配置。"
+                ? totalCount > 0
+                    ? $"已读取 {totalCount} 个本地点位，其中 {RenderedCount} 个可上图，{UnlocatedCount} 个未定位。"
+                    : "本地 SQLite 中暂无点位数据。"
+                : totalCount > 0
+                    ? $"已读取 {totalCount} 个本地点位，但缺少高德地图 Key 配置。"
+                    : "本地 SQLite 中暂无点位数据，且缺少高德地图 Key 配置。"
             : result.Message;
 
-        MapBootstrapJson = BuildBootstrapJson(devices, StatusText, hasMapKey, result.Success);
+        MapBootstrapJson = BuildBootstrapJson(devices, StatusText, hasMapKey, hasMapKey && result.Success);
     }
 
     private string BuildBootstrapJson(
@@ -118,9 +129,12 @@ public sealed partial class MapPageViewModel(
             deviceName = device.DeviceName,
             groupId = device.GroupId,
             location = device.Location ?? string.Empty,
+            locationLabel = GetLocationLabel(device.Location),
+            locationDisplay = GetLocationDisplay(device.Location),
             latitude = device.Latitude ?? string.Empty,
             longitude = device.Longitude ?? string.Empty,
             onlineStatus = device.OnlineStatus,
+            onlineStatusText = GetOnlineStatusText(device.OnlineStatus),
             cloudStatus = device.CloudStatus,
             bandStatus = device.BandStatus,
             sourceTypeFlag = device.SourceTypeFlag,
@@ -144,5 +158,45 @@ public sealed partial class MapPageViewModel(
             NumberStyles.Float | NumberStyles.AllowThousands,
             CultureInfo.InvariantCulture,
             out coordinate);
+    }
+
+    private static string GetOnlineStatusText(int? onlineStatus)
+    {
+        return onlineStatus switch
+        {
+            1 => "在线",
+            0 => "离线",
+            _ => "未知"
+        };
+    }
+
+    private static string GetLocationLabel(string? location)
+    {
+        return LooksLikeNumericLocation(location) ? "位置原始值" : "位置";
+    }
+
+    private static string GetLocationDisplay(string? location)
+    {
+        var text = location?.Trim();
+        return string.IsNullOrWhiteSpace(text) ? "无" : text;
+    }
+
+    private static bool LooksLikeNumericLocation(string? location)
+    {
+        var text = location?.Trim();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        foreach (var character in text)
+        {
+            if (!char.IsDigit(character))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
