@@ -196,6 +196,11 @@ public sealed class VlcPlaySvc(ILogger<VlcPlaySvc> logger) : IDisposable
 
     private void OnBuffering(object? sender, MediaPlayerBufferingEventArgs e)
     {
+        if (hasPlayed)
+        {
+            return;
+        }
+
         Publish(PlayStage.Connecting, $"正在建立播放链路，缓冲 {e.Cache:0}%");
     }
 
