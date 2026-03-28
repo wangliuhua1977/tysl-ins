@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Serilog;
 using Tysl.Inspection.Desktop.Application.Abstractions;
+using Tysl.Inspection.Desktop.App.Services;
 using Tysl.Inspection.Desktop.App.ViewModels;
 using Tysl.Inspection.Desktop.App.Views;
 using Tysl.Inspection.Desktop.Contracts.Configuration;
@@ -61,6 +62,7 @@ public partial class App : System.Windows.Application
                     failure.GroupName ?? string.Empty,
                     failure.Message);
             }
+
             logger.LogInformation(
                 "Headless sync completed. Groups={GroupCount}, Devices={DeviceCount}, Success={SuccessCount}, Failure={FailureCount}, LastSyncedAt={LastSyncedAt}.",
                 summary.GroupCount,
@@ -68,6 +70,7 @@ public partial class App : System.Windows.Application
                 summary.SuccessCount,
                 summary.FailureCount,
                 summary.LastSyncedAt);
+
             Shutdown();
             return;
         }
@@ -142,6 +145,8 @@ public partial class App : System.Windows.Application
                 services.AddSingleton<MapPageViewModel>();
                 services.AddSingleton<PreviewPageViewModel>();
                 services.AddSingleton<ThemeSettingsPageViewModel>();
+                services.AddSingleton<IPlayWinSvc, PlayWinSvc>();
+                services.AddTransient<VlcPlaySvc>();
             })
             .Build();
     }

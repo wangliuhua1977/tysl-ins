@@ -3,11 +3,13 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Extensions.Logging;
 using Tysl.Inspection.Desktop.Application.Abstractions;
+using Tysl.Inspection.Desktop.App.Services;
 
 namespace Tysl.Inspection.Desktop.App.ViewModels;
 
 public sealed partial class PreviewPageViewModel(
     IPreviewService previewService,
+    IPlayWinSvc playWinSvc,
     ILogger<PreviewPageViewModel> logger) : ObservableObject
 {
     private bool hasLoaded;
@@ -44,6 +46,12 @@ public sealed partial class PreviewPageViewModel(
     [ObservableProperty]
     private string requestedAtText = "暂无";
 
+    public bool IsPlayWindowReady => CanOpenPlayWindow();
+
+    public string PlayWindowHintText => IsPlayWindowReady
+        ? "RTSP 地址已就绪，可打开独立播放窗口。"
+        : "请先成功获取 RTSP 地址后再打开播放窗口。";
+
     public async Task InitializeAsync()
     {
         if (hasLoaded)
@@ -78,7 +86,7 @@ public sealed partial class PreviewPageViewModel(
 
         PageStatusText = Devices.Count > 0
             ? $"已加载 {Devices.Count} 个本地点位，可直接发起单点预览准备。"
-            : "本地 SQLite 中暂无点位数据，请先完成同步。";
+            : "本地 SQLite 中暂时无点位数据，请先完成同步。";
 
         SelectedDevice = Devices.FirstOrDefault(device => string.Equals(device.DeviceCode, currentCode, StringComparison.OrdinalIgnoreCase))
             ?? Devices.FirstOrDefault();
@@ -129,9 +137,26 @@ public sealed partial class PreviewPageViewModel(
         }
     }
 
+    [RelayCommand(CanExecute = nameof(CanOpenPlayWindow))]
+    private void OpenPlayWin()
+    {
+        if (!CanOpenPlayWindow())
+        {
+            return;
+        }
+
+        var message = playWinSvc.Open(new PlayWinArgs(DeviceName, DeviceCode, RtspUrl));
+        PageStatusText = message ?? $"已打开 {DeviceName} 的独立播放窗口。";
+    }
+
     private bool CanRequestPreview()
     {
         return !IsBusy && SelectedDevice is not null;
+    }
+
+    private bool CanOpenPlayWindow()
+    {
+        return !IsBusy && !string.IsNullOrWhiteSpace(RtspUrl);
     }
 
     partial void OnSelectedDeviceChanged(PreviewDeviceOption? value)
@@ -146,11 +171,24 @@ public sealed partial class PreviewPageViewModel(
         }
 
         RequestPreviewCommand.NotifyCanExecuteChanged();
+        OpenPlayWinCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(IsPlayWindowReady));
+        OnPropertyChanged(nameof(PlayWindowHintText));
     }
 
     partial void OnIsBusyChanged(bool value)
     {
         RequestPreviewCommand.NotifyCanExecuteChanged();
+        OpenPlayWinCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(IsPlayWindowReady));
+        OnPropertyChanged(nameof(PlayWindowHintText));
+    }
+
+    partial void OnRtspUrlChanged(string value)
+    {
+        OpenPlayWinCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(IsPlayWindowReady));
+        OnPropertyChanged(nameof(PlayWindowHintText));
     }
 
     private void Apply(PreviewPrepareResult result)

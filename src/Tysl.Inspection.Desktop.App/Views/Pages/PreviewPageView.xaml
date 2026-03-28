@@ -50,7 +50,7 @@
                     <TextBlock Margin="0,8,0,0"
                                Foreground="{DynamicResource SecondaryTextBrush}"
                                TextWrapping="Wrap"
-                               Text="只读取本地点位，不新增业务表，不做 RTSP 实际播放。" />
+                               Text="先获取 RTSP 地址，再打开独立播放窗口播放，不改当前 Tab 结构。" />
 
                     <TextBlock Margin="0,20,0,6"
                                Foreground="{DynamicResource SecondaryTextBrush}"
@@ -64,6 +64,16 @@
                             Padding="16,10"
                             Command="{Binding RequestPreviewCommand}"
                             Content="获取预览地址" />
+
+                    <Button Margin="0,12,0,0"
+                            Padding="16,10"
+                            Command="{Binding OpenPlayWinCommand}"
+                            Content="打开播放窗口" />
+
+                    <TextBlock Margin="0,8,0,0"
+                               Foreground="{DynamicResource SecondaryTextBrush}"
+                               TextWrapping="Wrap"
+                               Text="{Binding PlayWindowHintText}" />
                 </StackPanel>
             </Border>
 
@@ -130,7 +140,7 @@
                     <TextBlock Grid.Row="4"
                                Margin="0,14,0,0"
                                Foreground="{DynamicResource SecondaryTextBrush}"
-                               Text="有效期/失效时间" />
+                               Text="有效期 / 失效时间" />
                     <TextBlock Grid.Row="4"
                                Grid.Column="1"
                                Margin="0,14,0,0"
