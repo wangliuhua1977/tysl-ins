@@ -23,6 +23,11 @@ public interface IGroupSyncStore
     Task<LocalSyncSnapshot> GetLocalSyncSnapshotAsync(CancellationToken cancellationToken);
 }
 
+public interface IMapStore
+{
+    Task<IReadOnlyList<InspectionDevice>> GetDevicesAsync(CancellationToken cancellationToken);
+}
+
 public interface IGroupSyncService
 {
     Task<GroupSyncSummary> SyncAsync(CancellationToken cancellationToken);
@@ -34,3 +39,13 @@ public interface IOverviewStatsService
 {
     Task<OverviewStats> GetAsync(CancellationToken cancellationToken);
 }
+
+public interface IMapService
+{
+    Task<MapLoadResult> LoadAsync(CancellationToken cancellationToken);
+}
+
+public sealed record MapLoadResult(
+    bool Success,
+    string Message,
+    IReadOnlyList<InspectionDevice> Devices);

@@ -1,45 +1,352 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>地图宿主占位</title>
+    <title>Map</title>
     <style>
-        body {
+        :root {
+            --panel: rgba(255, 255, 255, 0.94);
+            --line: #d9e0ea;
+            --text: #103b5a;
+            --muted: #5b6472;
+            --online: #1b8bc8;
+            --offline: #d9534f;
+            --unknown: #8a8f98;
+        }
+
+        html, body {
+            width: 100%;
+            height: 100%;
             margin: 0;
-            font-family: "Microsoft YaHei UI", sans-serif;
+            font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
             background: linear-gradient(135deg, #eef5fb 0%, #d7e9f5 100%);
-            color: #103b5a;
+            color: var(--text);
+            overflow: hidden;
+        }
+
+        .shell { position: relative; width: 100%; height: 100%; }
+        .map { position: absolute; inset: 0; }
+
+        .overlay, .info {
+            position: absolute;
+            width: min(360px, calc(100vw - 32px));
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 18px;
+            box-shadow: 0 18px 48px rgba(15, 76, 129, 0.16);
+            padding: 16px;
+            backdrop-filter: blur(8px);
+        }
+
+        .overlay { top: 16px; left: 16px; }
+        .info { top: 16px; right: 16px; }
+
+        h1, h2 { margin: 0 0 10px; }
+        h1 { font-size: 20px; }
+        h2 { font-size: 18px; }
+
+        .status { font-size: 13px; color: var(--muted); line-height: 1.6; }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 14px;
+        }
+
+        .stat {
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            background: #fff;
+            padding: 10px 12px;
+        }
+
+        .stat span { display: block; font-size: 12px; color: var(--muted); }
+        .stat strong { display: block; margin-top: 6px; font-size: 20px; }
+
+        .info-grid {
+            display: grid;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--muted);
+        }
+
+        .info-grid b { color: var(--text); font-weight: 600; }
+
+        .empty {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            background: var(--panel);
+            border: 1px dashed var(--line);
+            border-radius: 18px;
+            padding: 18px 22px;
+            color: var(--muted);
+            display: none;
+            text-align: center;
+        }
+
+        .marker {
             display: flex;
             align-items: center;
-            justify-content: center;
-            min-height: 100vh;
+            gap: 8px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            color: #fff;
+            font-size: 12px;
+            font-weight: 600;
+            box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16);
+            white-space: nowrap;
         }
 
-        .panel {
-            width: min(560px, 90vw);
-            padding: 32px;
-            border-radius: 24px;
-            background: rgba(255, 255, 255, 0.86);
-            border: 1px solid rgba(16, 59, 90, 0.12);
-            box-shadow: 0 18px 48px rgba(15, 76, 129, 0.16);
+        .marker-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.96);
         }
 
-        h1 {
-            margin: 0 0 12px;
-            font-size: 28px;
-        }
-
-        p {
-            margin: 0;
-            line-height: 1.7;
-        }
+        .marker.online { background: var(--online); }
+        .marker.offline { background: var(--offline); }
+        .marker.unknown { background: var(--unknown); }
     </style>
 </head>
 <body>
-    <section class="panel">
-        <h1>地图宿主占位</h1>
-        <p>当前轮次不做真实点位渲染。WPF 地图承载方式已固定为 WebView2，后续轮次可在此页接入高德地图 JS API 与宿主消息桥。</p>
-    </section>
+    <div class="shell">
+        <div id="map" class="map"></div>
+
+        <section class="overlay">
+            <h1>Map Status</h1>
+            <div id="status" class="status">Waiting for local data...</div>
+            <div class="stats">
+                <div class="stat"><span>Rendered</span><strong id="renderedCount">0</strong></div>
+                <div class="stat"><span>Online</span><strong id="onlineCount">0</strong></div>
+                <div class="stat"><span>Offline</span><strong id="offlineCount">0</strong></div>
+                <div class="stat"><span>Unlocated</span><strong id="unlocatedCount">0</strong></div>
+            </div>
+        </section>
+
+        <section class="info">
+            <h2 id="infoTitle">Click a point to inspect</h2>
+            <div id="infoGrid" class="info-grid">
+                <div>deviceName: <b>-</b></div>
+                <div>groupId: <b>-</b></div>
+                <div>location: <b>-</b></div>
+                <div>latitude: <b>-</b></div>
+                <div>longitude: <b>-</b></div>
+                <div>onlineStatus: <b>-</b></div>
+                <div>cloudStatus: <b>-</b></div>
+                <div>bandStatus: <b>-</b></div>
+                <div>sourceTypeFlag: <b>-</b></div>
+            </div>
+        </section>
+
+        <div id="empty" class="empty">Missing AMap config or no renderable points</div>
+    </div>
+
+    <script>
+        const state = {
+            map: null,
+            markers: [],
+            selected: null
+        };
+
+        const statusEl = document.getElementById("status");
+        const renderedEl = document.getElementById("renderedCount");
+        const onlineEl = document.getElementById("onlineCount");
+        const offlineEl = document.getElementById("offlineCount");
+        const unlocatedEl = document.getElementById("unlocatedCount");
+        const emptyEl = document.getElementById("empty");
+        const infoTitleEl = document.getElementById("infoTitle");
+        const infoGridEl = document.getElementById("infoGrid");
+
+        const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            "\"": "&quot;",
+            "'": "&#39;"
+        }[ch]));
+
+        function post(type, payload = {}) {
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage(Object.assign({ type }, payload));
+            }
+        }
+
+        function setInfo(point) {
+            if (!point) {
+                infoTitleEl.textContent = "Click a point to inspect";
+                infoGridEl.innerHTML = `
+                    <div>deviceName: <b>-</b></div>
+                    <div>groupId: <b>-</b></div>
+                    <div>location: <b>-</b></div>
+                    <div>latitude: <b>-</b></div>
+                    <div>longitude: <b>-</b></div>
+                    <div>onlineStatus: <b>-</b></div>
+                    <div>cloudStatus: <b>-</b></div>
+                    <div>bandStatus: <b>-</b></div>
+                    <div>sourceTypeFlag: <b>-</b></div>`;
+                return;
+            }
+
+            infoTitleEl.textContent = point.deviceName || "Unnamed point";
+            infoGridEl.innerHTML = [
+                ["deviceName", point.deviceName],
+                ["groupId", point.groupId],
+                ["location", point.location],
+                ["latitude", point.latitude],
+                ["longitude", point.longitude],
+                ["onlineStatus", point.onlineStatus ?? "null"],
+                ["cloudStatus", point.cloudStatus ?? "null"],
+                ["bandStatus", point.bandStatus ?? "null"],
+                ["sourceTypeFlag", point.sourceTypeFlag ?? "null"]
+            ].map(([label, value]) => `<div>${label}: <b>${escapeHtml(value)}</b></div>`).join("");
+        }
+
+        function setStats(stats) {
+            renderedEl.textContent = stats.renderedCount ?? 0;
+            onlineEl.textContent = stats.onlineCount ?? 0;
+            offlineEl.textContent = stats.offlineCount ?? 0;
+            unlocatedEl.textContent = stats.unlocatedCount ?? 0;
+        }
+
+        function setStatus(text) {
+            statusEl.textContent = text || "";
+        }
+
+        function showEmpty(message) {
+            emptyEl.textContent = message;
+            emptyEl.style.display = "block";
+        }
+
+        function hideEmpty() {
+            emptyEl.style.display = "none";
+        }
+
+        async function ensureMapScript(config) {
+            if (window.AMap) {
+                return;
+            }
+
+            if (config.securityJsCode) {
+                window._AMapSecurityConfig = {
+                    securityJsCode: config.securityJsCode
+                };
+            }
+
+            await new Promise((resolve, reject) => {
+                const script = document.createElement("script");
+                script.src = `https://webapi.amap.com/maps?v=${encodeURIComponent(config.jsApiVersion || "2.0")}&key=${encodeURIComponent(config.jsKey)}`;
+                script.onload = () => resolve();
+                script.onerror = () => reject(new Error("AMap script load failed"));
+                document.head.appendChild(script);
+            });
+        }
+
+        function markerClass(point) {
+            if (point.onlineStatus === 1) {
+                return "online";
+            }
+
+            if (point.onlineStatus === 0) {
+                return "offline";
+            }
+
+            return "unknown";
+        }
+
+        function buildMarker(point) {
+            const wrap = document.createElement("div");
+            const cls = markerClass(point);
+            wrap.className = `marker ${cls}`;
+            wrap.innerHTML = `<span class="marker-dot"></span><span>${escapeHtml(point.deviceName || "Unnamed point")}</span>`;
+            return wrap;
+        }
+
+        function showPoint(point) {
+            setInfo(point);
+            state.selected = point;
+        }
+
+        function renderMap(points) {
+            const renderable = points.filter((point) => point.hasCoordinate);
+            if (!state.map) {
+                state.map = new AMap.Map("map", {
+                    zoom: 4,
+                    center: [105, 35],
+                    viewMode: "2D"
+                });
+            }
+
+            state.map.clearMap();
+            state.markers = [];
+
+            renderable.forEach((point) => {
+                const lng = Number(point.longitude);
+                const lat = Number(point.latitude);
+                if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
+                    return;
+                }
+
+                const marker = new AMap.Marker({
+                    position: [lng, lat],
+                    content: buildMarker(point),
+                    offset: new AMap.Pixel(-18, -18)
+                });
+
+                marker.on("click", () => showPoint(point));
+                state.map.add(marker);
+                state.markers.push(marker);
+            });
+
+            if (state.markers.length > 0) {
+                state.map.setFitView(state.markers);
+                hideEmpty();
+                if (!state.selected) {
+                    showPoint(renderable[0]);
+                }
+            } else {
+                state.map.setZoomAndCenter(4, [105, 35]);
+                showEmpty(`Unlocated points: ${points.length}`);
+                setInfo(null);
+            }
+        }
+
+        async function renderBootstrap(bootstrap) {
+            setStatus(bootstrap.statusText || "");
+            setStats(bootstrap.stats || {});
+
+            const mapCfg = bootstrap.map || {};
+            const points = Array.isArray(bootstrap.points) ? bootstrap.points : [];
+
+            if (!mapCfg.shouldLoadMap) {
+                showEmpty(mapCfg.hasMapKey ? "Local data is unavailable, map is skipped." : "Missing AMap config.");
+                setInfo(null);
+                return;
+            }
+
+            try {
+                await ensureMapScript(mapCfg);
+                renderMap(points);
+            } catch (error) {
+                showEmpty(error.message || "Map script load failed");
+                post("map-error", { message: error.message || "map load failed" });
+            }
+        }
+
+        window.chrome?.webview?.addEventListener("message", (event) => {
+            const data = event.data || {};
+            if (data.type === "bootstrap") {
+                renderBootstrap(data);
+            }
+        });
+
+        window.addEventListener("DOMContentLoaded", () => {
+            post("ready");
+        });
+    </script>
 </body>
 </html>
