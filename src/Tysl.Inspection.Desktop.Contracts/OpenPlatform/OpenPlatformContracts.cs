@@ -29,6 +29,14 @@ public sealed record OpenPlatformDeviceDto(
     [property: JsonConverter(typeof(FlexibleNullableIntJsonConverter))] int? BandStatus,
     [property: JsonConverter(typeof(FlexibleNullableIntJsonConverter))] int? SourceTypeFlag);
 
+public sealed record OpenPlatformDeviceStatusPayload(
+    string DeviceCode,
+    int? OnlineStatus);
+
+public sealed record OpenPlatformPreviewUrlPayload(
+    string Url,
+    string? ExpireTime);
+
 public sealed record OpenPlatformCallResult<T>
 {
     public bool Success { get; init; }
@@ -65,6 +73,14 @@ public interface IOpenPlatformClient
 
     Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformDeviceDto>>> GetGroupDeviceListAsync(
         string groupId,
+        CancellationToken cancellationToken);
+
+    Task<OpenPlatformCallResult<OpenPlatformDeviceStatusPayload>> GetDeviceStatusAsync(
+        string deviceCode,
+        CancellationToken cancellationToken);
+
+    Task<OpenPlatformCallResult<OpenPlatformPreviewUrlPayload>> GetDevicePreviewUrlAsync(
+        string deviceCode,
         CancellationToken cancellationToken);
 }
 

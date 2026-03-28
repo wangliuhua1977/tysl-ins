@@ -113,6 +113,26 @@ public sealed class GroupSyncServiceTests
         {
             return Task.FromResult(GroupDeviceResults[groupId]);
         }
+
+        public Task<OpenPlatformCallResult<OpenPlatformDeviceStatusPayload>> GetDeviceStatusAsync(string deviceCode, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new OpenPlatformCallResult<OpenPlatformDeviceStatusPayload>
+            {
+                Success = true,
+                EndpointName = "getDeviceStatus",
+                Payload = new OpenPlatformDeviceStatusPayload(deviceCode, 1)
+            });
+        }
+
+        public Task<OpenPlatformCallResult<OpenPlatformPreviewUrlPayload>> GetDevicePreviewUrlAsync(string deviceCode, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new OpenPlatformCallResult<OpenPlatformPreviewUrlPayload>
+            {
+                Success = true,
+                EndpointName = "getDeviceVideoUrl",
+                Payload = new OpenPlatformPreviewUrlPayload($"rtsp://demo/live/{deviceCode}", "600 秒")
+            });
+        }
     }
 
     private sealed class InMemoryGroupSyncStore : IGroupSyncStore

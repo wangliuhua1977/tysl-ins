@@ -1,0 +1,172 @@
+<UserControl x:Class="Tysl.Inspection.Desktop.App.Views.Pages.PreviewPageView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Loaded="OnLoaded">
+    <Grid Background="{DynamicResource WindowBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Border Margin="24,24,24,12"
+                Padding="20"
+                Background="{DynamicResource HeroBrush}"
+                BorderBrush="{DynamicResource CardBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="20">
+            <StackPanel>
+                <TextBlock FontSize="24"
+                           FontWeight="SemiBold"
+                           Foreground="White"
+                           Text="单点视频预览" />
+                <TextBlock Margin="0,8,0,0"
+                           Foreground="#F3F4F6"
+                           TextWrapping="Wrap"
+                           Text="从本地 SQLite 选择一个点位，先做设备状态诊断，再获取 RTSP 预览地址。" />
+                <TextBlock Margin="0,8,0,0"
+                           Foreground="#DDE7F2"
+                           TextWrapping="Wrap"
+                           Text="{Binding PageStatusText}" />
+            </StackPanel>
+        </Border>
+
+        <Grid Grid.Row="1" Margin="24,0,24,24">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="380" />
+                <ColumnDefinition Width="12" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Padding="20"
+                    Background="{DynamicResource CardBrush}"
+                    BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="20">
+                <StackPanel>
+                    <TextBlock FontSize="18"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource PrimaryTextBrush}"
+                               Text="预览入口" />
+                    <TextBlock Margin="0,8,0,0"
+                               Foreground="{DynamicResource SecondaryTextBrush}"
+                               TextWrapping="Wrap"
+                               Text="只读取本地点位，不新增业务表，不做 RTSP 实际播放。" />
+
+                    <TextBlock Margin="0,20,0,6"
+                               Foreground="{DynamicResource SecondaryTextBrush}"
+                               Text="选择点位" />
+                    <ComboBox ItemsSource="{Binding Devices}"
+                              SelectedItem="{Binding SelectedDevice}"
+                              DisplayMemberPath="DisplayText"
+                              MinHeight="38" />
+
+                    <Button Margin="0,16,0,0"
+                            Padding="16,10"
+                            Command="{Binding RequestPreviewCommand}"
+                            Content="获取预览地址" />
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Column="2"
+                    Padding="20"
+                    Background="{DynamicResource CardBrush}"
+                    BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="20">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="160" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="设备名称" />
+                    <TextBlock Grid.Column="1"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource PrimaryTextBrush}"
+                               Text="{Binding DeviceName}" />
+
+                    <TextBlock Grid.Row="1"
+                               Margin="0,14,0,0"
+                               Foreground="{DynamicResource SecondaryTextBrush}"
+                               Text="设备编码" />
+                    <TextBlock Grid.Row="1"
+                               Grid.Column="1"
+                               Margin="0,14,0,0"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource PrimaryTextBrush}"
+                               Text="{Binding DeviceCode}" />
+
+                    <TextBlock Grid.Row="2"
+                               Margin="0,14,0,0"
+                               Foreground="{DynamicResource SecondaryTextBrush}"
+                               Text="当前诊断状态" />
+                    <TextBlock Grid.Row="2"
+                               Grid.Column="1"
+                               Margin="0,14,0,0"
+                               Foreground="{DynamicResource PrimaryTextBrush}"
+                               TextWrapping="Wrap"
+                               Text="{Binding DiagnosisText}" />
+
+                    <TextBlock Grid.Row="3"
+                               Margin="0,14,0,0"
+                               Foreground="{DynamicResource SecondaryTextBrush}"
+                               Text="地址获取结果" />
+                    <TextBlock Grid.Row="3"
+                               Grid.Column="1"
+                               Margin="0,14,0,0"
+                               Foreground="{DynamicResource PrimaryTextBrush}"
+                               TextWrapping="Wrap"
+                               Text="{Binding AddressStatusText}" />
+
+                    <TextBlock Grid.Row="4"
+                               Margin="0,14,0,0"
+                               Foreground="{DynamicResource SecondaryTextBrush}"
+                               Text="有效期/失效时间" />
+                    <TextBlock Grid.Row="4"
+                               Grid.Column="1"
+                               Margin="0,14,0,0"
+                               Foreground="{DynamicResource PrimaryTextBrush}"
+                               TextWrapping="Wrap"
+                               Text="{Binding ExpireText}" />
+
+                    <TextBlock Grid.Row="5"
+                               Margin="0,14,0,0"
+                               Foreground="{DynamicResource SecondaryTextBrush}"
+                               Text="RTSP 地址" />
+                    <TextBox Grid.Row="5"
+                             Grid.Column="1"
+                             Margin="0,14,0,0"
+                             Padding="12"
+                             MinHeight="120"
+                             VerticalAlignment="Stretch"
+                             Background="{DynamicResource WindowBackgroundBrush}"
+                             BorderBrush="{DynamicResource CardBorderBrush}"
+                             BorderThickness="1"
+                             IsReadOnly="True"
+                             TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             Text="{Binding RtspUrl}" />
+
+                    <TextBlock Grid.Row="6"
+                               Margin="0,14,0,0"
+                               Foreground="{DynamicResource SecondaryTextBrush}"
+                               Text="最近一次请求时间" />
+                    <TextBlock Grid.Row="6"
+                               Grid.Column="1"
+                               Margin="0,14,0,0"
+                               Foreground="{DynamicResource PrimaryTextBrush}"
+                               Text="{Binding RequestedAtText}" />
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

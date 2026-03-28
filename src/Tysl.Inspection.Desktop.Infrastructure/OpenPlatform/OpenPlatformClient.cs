@@ -16,6 +16,9 @@ namespace Tysl.Inspection.Desktop.Infrastructure.OpenPlatform;
 
 public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
 {
+    private const string DeviceStatusPath = "/open/token/vcpDevice/getDeviceStatus";
+    private const string DevicePreviewPath = "/open/token/vcpDevice/getDeviceVideoUrl";
+
     private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true,
@@ -107,6 +110,62 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
                     .Select(device => device with { GroupId = string.IsNullOrWhiteSpace(device.GroupId) ? groupId : device.GroupId })
                     .ToArray();
             },
+            cancellationToken: cancellationToken);
+    }
+
+    public async Task<OpenPlatformCallResult<OpenPlatformDeviceStatusPayload>> GetDeviceStatusAsync(
+        string deviceCode,
+        CancellationToken cancellationToken)
+    {
+        var accessTokenResult = await EnsureAccessTokenAsync(cancellationToken);
+        if (!accessTokenResult.Success || accessTokenResult.Payload is null)
+        {
+            return Fail<OpenPlatformDeviceStatusPayload>(
+                "getDeviceStatus",
+                BuildUrl(DeviceStatusPath),
+                $"accessToken 获取失败：{accessTokenResult.BuildMessage()}");
+        }
+
+        var requestParameters = new List<KeyValuePair<string, string?>>
+        {
+            new("accessToken", accessTokenResult.Payload.AccessToken),
+            new("enterpriseUser", options.EnterpriseUser),
+            new("deviceCode", deviceCode)
+        };
+
+        return await SendAsync(
+            endpointName: "getDeviceStatus",
+            path: DeviceStatusPath,
+            privateParameters: requestParameters,
+            parsePayload: root => ParseDeviceStatus(root, deviceCode),
+            cancellationToken: cancellationToken);
+    }
+
+    public async Task<OpenPlatformCallResult<OpenPlatformPreviewUrlPayload>> GetDevicePreviewUrlAsync(
+        string deviceCode,
+        CancellationToken cancellationToken)
+    {
+        var accessTokenResult = await EnsureAccessTokenAsync(cancellationToken);
+        if (!accessTokenResult.Success || accessTokenResult.Payload is null)
+        {
+            return Fail<OpenPlatformPreviewUrlPayload>(
+                "getDeviceVideoUrl",
+                BuildUrl(DevicePreviewPath),
+                $"accessToken 获取失败：{accessTokenResult.BuildMessage()}");
+        }
+
+        var requestParameters = new List<KeyValuePair<string, string?>>
+        {
+            new("accessToken", accessTokenResult.Payload.AccessToken),
+            new("enterpriseUser", options.EnterpriseUser),
+            new("deviceCode", deviceCode)
+        };
+
+        return await SendAsync(
+            endpointName: "getDeviceVideoUrl",
+            path: DevicePreviewPath,
+            privateParameters: requestParameters,
+            parsePayload: ParsePreviewUrl,
             cancellationToken: cancellationToken);
     }
 
@@ -473,6 +532,84 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
         }
 
         return null;
+    }
+
+    private static OpenPlatformDeviceStatusPayload ParseDeviceStatus(JsonElement root, string requestedDeviceCode)
+    {
+        var source = UnwrapPayload(root, requestedDeviceCode);
+        var deviceCode = GetString(source, "deviceCode", "deviceId", "code") ?? requestedDeviceCode;
+        var onlineStatus = GetInt32(source, "onlineStatus", "deviceStatus", "status", "devStatus");
+        return new OpenPlatformDeviceStatusPayload(deviceCode, onlineStatus);
+    }
+
+    private static OpenPlatformPreviewUrlPayload ParsePreviewUrl(JsonElement root)
+    {
+        var source = UnwrapPayload(root, null);
+        var url = GetString(source, "url", "rtspUrl", "playUrl", "previewUrl")
+            ?? throw new InvalidOperationException("Missing required field: url");
+        var expireTime = GetString(source, "expireTime", "expire", "expireAt", "expireDateTime");
+        return new OpenPlatformPreviewUrlPayload(url, expireTime);
+    }
+
+    private static JsonElement UnwrapPayload(JsonElement root, string? requestedDeviceCode)
+    {
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            return PickArrayItem(root, requestedDeviceCode);
+        }
+
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return root;
+        }
+
+        if (TryGetNestedArrayItem(root, requestedDeviceCode, out var arrayItem))
+        {
+            return arrayItem;
+        }
+
+        foreach (var name in new[] { "item", "device", "result", "data" })
+        {
+            if (root.TryGetProperty(name, out var nested) && nested.ValueKind == JsonValueKind.Object)
+            {
+                return nested;
+            }
+        }
+
+        return root;
+    }
+
+    private static bool TryGetNestedArrayItem(JsonElement root, string? requestedDeviceCode, out JsonElement item)
+    {
+        foreach (var name in new[] { "list", "rows", "devices", "items", "deviceList", "deviceStatusList" })
+        {
+            if (root.TryGetProperty(name, out var nested) && nested.ValueKind == JsonValueKind.Array)
+            {
+                item = PickArrayItem(nested, requestedDeviceCode);
+                return true;
+            }
+        }
+
+        item = default;
+        return false;
+    }
+
+    private static JsonElement PickArrayItem(JsonElement array, string? requestedDeviceCode)
+    {
+        JsonElement? firstItem = null;
+
+        foreach (var item in array.EnumerateArray())
+        {
+            firstItem ??= item.Clone();
+            var itemCode = GetString(item, "deviceCode", "deviceId", "code");
+            if (!string.IsNullOrWhiteSpace(requestedDeviceCode)
+                && string.Equals(itemCode, requestedDeviceCode, StringComparison.OrdinalIgnoreCase))
+            {
+                return item.Clone();
+            }
+        }
+
+        return firstItem?.Clone() ?? array.Clone();
     }
 
     private static OpenPlatformCallResult<T> Fail<T>(string endpointName, string requestUrl, string message)

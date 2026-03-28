@@ -48,6 +48,9 @@
             <TabItem Header="点位态势地图">
                 <pages:MapPageView DataContext="{Binding Map}" />
             </TabItem>
+            <TabItem Header="单点预览">
+                <pages:PreviewPageView DataContext="{Binding Preview}" />
+            </TabItem>
             <TabItem Header="主题设置">
                 <pages:ThemeSettingsPageView DataContext="{Binding ThemeSettings}" />
             </TabItem>

@@ -45,7 +45,37 @@ public interface IMapService
     Task<MapLoadResult> LoadAsync(CancellationToken cancellationToken);
 }
 
+public interface IPreviewService
+{
+    Task<PreviewDeviceLoadResult> LoadLocalDevicesAsync(CancellationToken cancellationToken);
+
+    Task<PreviewPrepareResult> PrepareAsync(string deviceCode, CancellationToken cancellationToken);
+}
+
 public sealed record MapLoadResult(
     bool Success,
     string Message,
     IReadOnlyList<InspectionDevice> Devices);
+
+public sealed record PreviewDeviceOption(
+    string DeviceCode,
+    string DeviceName,
+    int? OnlineStatus)
+{
+    public string DisplayText => $"{DeviceName} ({DeviceCode})";
+}
+
+public sealed record PreviewDeviceLoadResult(
+    bool Success,
+    string Message,
+    IReadOnlyList<PreviewDeviceOption> Devices);
+
+public sealed record PreviewPrepareResult(
+    bool Success,
+    string DeviceCode,
+    string DeviceName,
+    string DiagnosisText,
+    string AddressStatusText,
+    string? RtspUrl,
+    string ExpireText,
+    DateTimeOffset RequestedAt);

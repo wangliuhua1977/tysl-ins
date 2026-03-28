@@ -72,6 +72,35 @@ public partial class App : System.Windows.Application
             return;
         }
 
+        var previewArgIndex = Array.FindIndex(e.Args, argument => string.Equals(argument, "--preview-once", StringComparison.OrdinalIgnoreCase));
+        if (previewArgIndex >= 0)
+        {
+            var deviceCode = previewArgIndex + 1 < e.Args.Length
+                ? e.Args[previewArgIndex + 1]
+                : string.Empty;
+
+            if (string.IsNullOrWhiteSpace(deviceCode))
+            {
+                Console.WriteLine("PREVIEW ERROR deviceCode is required after --preview-once");
+                Shutdown();
+                return;
+            }
+
+            var previewService = host.Services.GetRequiredService<IPreviewService>();
+            var result = await previewService.PrepareAsync(deviceCode, CancellationToken.None);
+            Console.WriteLine(
+                "PREVIEW SUMMARY deviceCode={0} deviceName={1} diagnosis={2} result={3} expire={4} requestedAt={5} rtsp={6}",
+                result.DeviceCode,
+                result.DeviceName,
+                result.DiagnosisText,
+                result.AddressStatusText,
+                result.ExpireText,
+                result.RequestedAt.ToString("O"),
+                MaskUrl(result.RtspUrl));
+            Shutdown();
+            return;
+        }
+
         var shellWindow = host.Services.GetRequiredService<ShellWindow>();
         shellWindow.DataContext = host.Services.GetRequiredService<ShellWindowViewModel>();
         MainWindow = shellWindow;
@@ -111,6 +140,7 @@ public partial class App : System.Windows.Application
                 services.AddSingleton<OverviewPageViewModel>();
                 services.AddSingleton<BasicConfigurationPageViewModel>();
                 services.AddSingleton<MapPageViewModel>();
+                services.AddSingleton<PreviewPageViewModel>();
                 services.AddSingleton<ThemeSettingsPageViewModel>();
             })
             .Build();
@@ -123,5 +153,17 @@ public partial class App : System.Windows.Application
         {
             File.Delete(file);
         }
+    }
+
+    private static string MaskUrl(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        return value.Length <= 12
+            ? "****"
+            : $"{value[..6]}****{value[^6..]}";
     }
 }

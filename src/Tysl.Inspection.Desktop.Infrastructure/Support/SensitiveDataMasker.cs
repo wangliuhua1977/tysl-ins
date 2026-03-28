@@ -14,6 +14,9 @@ internal static class SensitiveDataMasker
         "rsaPrivateKey",
         "defaultWebhook",
         "webhook",
+        "url",
+        "rtspUrl",
+        "playUrl",
         "phone",
         "enterpriseUser",
         "parentUser"

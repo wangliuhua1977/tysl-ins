@@ -64,4 +64,51 @@ public sealed class FakeOpenPlatformClient : IOpenPlatformClient
             Payload = payload
         });
     }
+
+    public Task<OpenPlatformCallResult<OpenPlatformDeviceStatusPayload>> GetDeviceStatusAsync(
+        string deviceCode,
+        CancellationToken cancellationToken)
+    {
+        var status = deviceCode switch
+        {
+            "dev-001" => 1,
+            "dev-002" => 0,
+            "dev-003" => 2,
+            _ => 1
+        };
+
+        return Task.FromResult(new OpenPlatformCallResult<OpenPlatformDeviceStatusPayload>
+        {
+            Success = true,
+            EndpointName = "getDeviceStatus",
+            RequestUrl = "fake://getDeviceStatus",
+            Payload = new OpenPlatformDeviceStatusPayload(deviceCode, status)
+        });
+    }
+
+    public Task<OpenPlatformCallResult<OpenPlatformPreviewUrlPayload>> GetDevicePreviewUrlAsync(
+        string deviceCode,
+        CancellationToken cancellationToken)
+    {
+        if (string.Equals(deviceCode, "dev-002", StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.FromResult(new OpenPlatformCallResult<OpenPlatformPreviewUrlPayload>
+            {
+                Success = false,
+                EndpointName = "getDeviceVideoUrl",
+                RequestUrl = "fake://getDeviceVideoUrl",
+                ErrorMessage = "设备离线"
+            });
+        }
+
+        return Task.FromResult(new OpenPlatformCallResult<OpenPlatformPreviewUrlPayload>
+        {
+            Success = true,
+            EndpointName = "getDeviceVideoUrl",
+            RequestUrl = "fake://getDeviceVideoUrl",
+            Payload = new OpenPlatformPreviewUrlPayload(
+                $"rtsp://fake-platform.example/live/{deviceCode}",
+                "600 秒")
+        });
+    }
 }
