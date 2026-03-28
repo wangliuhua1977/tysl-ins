@@ -94,7 +94,7 @@ public sealed partial class PlayWinViewModel(
         StatusHintText = update.HintText;
         MediaPlayer ??= player.MediaPlayer;
 
-        if (update.Stage is PlayStage.InitFailed or PlayStage.LinkFailed or PlayStage.Interrupted)
+        if (update.Stage is PlayStage.InitFailed or PlayStage.LinkFailed or PlayStage.Interrupted or PlayStage.AddressExpired)
         {
             logger.LogWarning(
                 "Play window status updated. DeviceCode={DeviceCode}, Stage={Stage}",

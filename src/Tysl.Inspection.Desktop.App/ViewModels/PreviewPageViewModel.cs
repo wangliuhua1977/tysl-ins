@@ -46,6 +46,21 @@ public sealed partial class PreviewPageViewModel(
     [ObservableProperty]
     private string requestedAtText = "暂无";
 
+    [ObservableProperty]
+    private string inspectConclusion = "尚未发起巡检诊断";
+
+    [ObservableProperty]
+    private string inspectFailureCategory = "暂无";
+
+    [ObservableProperty]
+    private string inspectStageText = "在线状态：暂无 | RTSP：未校验 | 播放建链：未启动 | Playing：未进入";
+
+    [ObservableProperty]
+    private string inspectDetailText = "仅在发起巡检诊断后展示最小结果。";
+
+    [ObservableProperty]
+    private string inspectAtText = "暂无";
+
     public bool IsPlayWindowReady => CanOpenPlayWindow();
 
     public string PlayWindowHintText => IsPlayWindowReady
@@ -137,6 +152,47 @@ public sealed partial class PreviewPageViewModel(
         }
     }
 
+    [RelayCommand(CanExecute = nameof(CanRequestInspect))]
+    private async Task RequestInspectAsync()
+    {
+        if (SelectedDevice is null)
+        {
+            return;
+        }
+
+        try
+        {
+            IsBusy = true;
+            PageStatusText = $"正在为 {SelectedDevice.DeviceName} 执行最小巡检诊断...";
+
+            var result = await previewService.InspectAsync(SelectedDevice.DeviceCode, CancellationToken.None);
+            ApplyInspect(result);
+            PageStatusText = "最小巡检诊断已完成，请查看结果。";
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Single inspect page request failed.");
+            ApplyInspect(
+                new InspectResult(
+                    DateTimeOffset.Now,
+                    DeviceName,
+                    DeviceCode,
+                    false,
+                    "未获取",
+                    false,
+                    false,
+                    false,
+                    "巡检失败：巡检执行异常",
+                    "巡检执行异常",
+                    $"最小巡检诊断失败：{exception.Message}"));
+            PageStatusText = "最小巡检诊断失败。";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     [RelayCommand(CanExecute = nameof(CanOpenPlayWindow))]
     private void OpenPlayWin()
     {
@@ -159,6 +215,11 @@ public sealed partial class PreviewPageViewModel(
         return !IsBusy && !string.IsNullOrWhiteSpace(RtspUrl);
     }
 
+    private bool CanRequestInspect()
+    {
+        return !IsBusy && SelectedDevice is not null;
+    }
+
     partial void OnSelectedDeviceChanged(PreviewDeviceOption? value)
     {
         if (value is null)
@@ -171,6 +232,7 @@ public sealed partial class PreviewPageViewModel(
         }
 
         RequestPreviewCommand.NotifyCanExecuteChanged();
+        RequestInspectCommand.NotifyCanExecuteChanged();
         OpenPlayWinCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(IsPlayWindowReady));
         OnPropertyChanged(nameof(PlayWindowHintText));
@@ -179,6 +241,7 @@ public sealed partial class PreviewPageViewModel(
     partial void OnIsBusyChanged(bool value)
     {
         RequestPreviewCommand.NotifyCanExecuteChanged();
+        RequestInspectCommand.NotifyCanExecuteChanged();
         OpenPlayWinCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(IsPlayWindowReady));
         OnPropertyChanged(nameof(PlayWindowHintText));
@@ -211,6 +274,7 @@ public sealed partial class PreviewPageViewModel(
         RtspUrl = string.Empty;
         ExpireText = "平台未返回有效期";
         RequestedAtText = "暂无";
+        ResetInspectResult();
     }
 
     private void ResetPreviewResult()
@@ -222,5 +286,27 @@ public sealed partial class PreviewPageViewModel(
         RtspUrl = string.Empty;
         ExpireText = "平台未返回有效期";
         RequestedAtText = "暂无";
+        ResetInspectResult();
+    }
+
+    private void ApplyInspect(InspectResult result)
+    {
+        DeviceName = result.DeviceName;
+        DeviceCode = result.DeviceCode;
+        InspectConclusion = result.Conclusion;
+        InspectFailureCategory = string.IsNullOrWhiteSpace(result.FailureCategory) ? "无" : result.FailureCategory;
+        InspectStageText =
+            $"在线状态：{result.OnlineStatus} | RTSP：{(result.RtspReady ? "已就绪" : "未就绪")} | 播放建链：{(result.PlaybackStarted ? "已启动" : "未启动")} | Playing：{(result.EnteredPlaying ? "已进入" : "未进入")}";
+        InspectDetailText = result.DetailMessage;
+        InspectAtText = result.InspectAt.ToString("yyyy-MM-dd HH:mm:ss");
+    }
+
+    private void ResetInspectResult()
+    {
+        InspectConclusion = "尚未发起巡检诊断";
+        InspectFailureCategory = "暂无";
+        InspectStageText = "在线状态：暂无 | RTSP：未校验 | 播放建链：未启动 | Playing：未进入";
+        InspectDetailText = "仅在发起巡检诊断后展示最小结果。";
+        InspectAtText = "暂无";
     }
 }

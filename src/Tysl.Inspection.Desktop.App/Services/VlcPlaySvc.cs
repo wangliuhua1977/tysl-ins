@@ -12,7 +12,8 @@ public enum PlayStage
     Stopped,
     InitFailed,
     LinkFailed,
-    Interrupted
+    Interrupted,
+    AddressExpired
 }
 
 public sealed record PlayUpdate(
@@ -33,6 +34,7 @@ public static class PlayText
             PlayStage.InitFailed => "播放初始化失败",
             PlayStage.LinkFailed => "播放建链失败",
             PlayStage.Interrupted => "播放过程中断",
+            PlayStage.AddressExpired => "地址可能失效",
             _ => "播放状态未知"
         };
     }
@@ -48,6 +50,7 @@ public static class PlayText
             PlayStage.InitFailed => "播放器未能完成初始化，请查看应用日志。",
             PlayStage.LinkFailed => "地址可能失效，请回到预览页重新获取。",
             PlayStage.Interrupted => "地址可能失效，请回到预览页重新获取。",
+            PlayStage.AddressExpired => "当前 RTSP 地址可能已失效，请回到预览页重新获取。",
             _ => string.Empty
         };
     }
@@ -229,8 +232,9 @@ public sealed class VlcPlaySvc(ILogger<VlcPlaySvc> logger) : IDisposable
             return;
         }
 
-        logger.LogWarning("Play interrupted because media ended. Classification={Stage}, Rtsp={RtspUrl}", PlayStage.Interrupted, maskedRtspUrl);
-        Publish(PlayStage.Interrupted);
+        var stage = hasPlayed ? PlayStage.Interrupted : PlayStage.AddressExpired;
+        logger.LogWarning("Play interrupted because media ended. Classification={Stage}, Rtsp={RtspUrl}", stage, maskedRtspUrl);
+        Publish(stage);
     }
 
     private void OnEncounteredError(object? sender, EventArgs e)

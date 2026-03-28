@@ -7,6 +7,7 @@ namespace Tysl.Inspection.Desktop.Application.Services;
 public sealed class PreviewService(
     IMapStore mapStore,
     IOpenPlatformClient openPlatformClient,
+    IPlayProbe playProbe,
     ILogger<PreviewService> logger) : IPreviewService
 {
     public async Task<PreviewDeviceLoadResult> LoadLocalDevicesAsync(CancellationToken cancellationToken)
@@ -38,99 +39,50 @@ public sealed class PreviewService(
 
         try
         {
-            var devices = await mapStore.GetDevicesAsync(cancellationToken);
-            var device = devices.FirstOrDefault(item => string.Equals(item.DeviceCode, deviceCode, StringComparison.OrdinalIgnoreCase));
-            if (device is null)
+            var flow = await PrepareCoreAsync(deviceCode, requestedAt, cancellationToken);
+
+            if (!flow.DeviceFound)
             {
                 logger.LogWarning("Preview preparation aborted because local device {DeviceCode} was not found.", deviceCode);
-                return BuildResult(
-                    success: false,
-                    deviceCode,
-                    "未知设备",
-                    "本地点位不存在，请先完成同步",
-                    "未发起预览地址获取",
-                    null,
-                    "平台未返回有效期",
-                    requestedAt);
             }
-
-            var statusResult = await openPlatformClient.GetDeviceStatusAsync(device.DeviceCode, cancellationToken);
-            if (!statusResult.Success || statusResult.Payload is null)
+            else if (!flow.StatusResolved)
             {
-                var message = BuildStatusFailureMessage(statusResult.BuildMessage());
                 logger.LogWarning(
                     "Single-device preview status query failed for {DeviceCode}. Message: {Message}",
-                    device.DeviceCode,
-                    message);
-
-                return BuildResult(
-                    success: false,
-                    device.DeviceCode,
-                    device.DeviceName,
-                    message,
-                    "未发起预览地址获取",
-                    null,
-                    "平台未返回有效期",
-                    requestedAt);
+                    flow.DeviceCode,
+                    flow.DiagnosisText);
             }
-
-            var diagnosisText = BuildDiagnosisText(statusResult.Payload.OnlineStatus);
-            if (statusResult.Payload.OnlineStatus is not 1)
+            else if (flow.OnlineStatus is not 1)
             {
                 logger.LogInformation(
                     "Single-device preview stopped after status diagnosis for {DeviceCode}. OnlineStatus={OnlineStatus}.",
-                    device.DeviceCode,
-                    statusResult.Payload.OnlineStatus);
-
-                return BuildResult(
-                    success: false,
-                    device.DeviceCode,
-                    device.DeviceName,
-                    diagnosisText,
-                    "未发起预览地址获取",
-                    null,
-                    "平台未返回有效期",
-                    requestedAt);
+                    flow.DeviceCode,
+                    flow.OnlineStatus);
             }
-
-            var previewResult = await openPlatformClient.GetDevicePreviewUrlAsync(device.DeviceCode, cancellationToken);
-            if (!previewResult.Success || previewResult.Payload is null || string.IsNullOrWhiteSpace(previewResult.Payload.Url))
+            else if (!flow.RtspReady)
             {
-                var message = BuildPreviewFailureMessage(previewResult.BuildMessage());
                 logger.LogWarning(
                     "Single-device preview url query failed for {DeviceCode}. Message: {Message}",
-                    device.DeviceCode,
-                    message);
-
-                return BuildResult(
-                    success: false,
-                    device.DeviceCode,
-                    device.DeviceName,
-                    diagnosisText,
-                    message,
-                    null,
-                    "平台未返回有效期",
-                    requestedAt);
+                    flow.DeviceCode,
+                    flow.AddressStatusText);
+            }
+            else
+            {
+                logger.LogInformation(
+                    "Single-device preview url is ready for {DeviceCode}. ExpireText={ExpireText}",
+                    flow.DeviceCode,
+                    flow.ExpireText);
             }
 
-            var expireText = string.IsNullOrWhiteSpace(previewResult.Payload.ExpireTime)
-                ? "平台未返回有效期"
-                : $"平台返回：{previewResult.Payload.ExpireTime}";
-
-            logger.LogInformation(
-                "Single-device preview url is ready for {DeviceCode}. ExpireText={ExpireText}",
-                device.DeviceCode,
-                expireText);
-
             return BuildResult(
-                success: true,
-                device.DeviceCode,
-                device.DeviceName,
-                diagnosisText,
-                "预览地址已就绪",
-                previewResult.Payload.Url,
-                expireText,
-                requestedAt);
+                flow.RtspReady,
+                flow.DeviceCode,
+                flow.DeviceName,
+                flow.DiagnosisText,
+                flow.AddressStatusText,
+                flow.RtspUrl,
+                flow.ExpireText,
+                flow.RequestedAt);
         }
         catch (Exception exception)
         {
@@ -144,6 +96,132 @@ public sealed class PreviewService(
                 null,
                 "平台未返回有效期",
                 requestedAt);
+        }
+    }
+
+    public async Task<InspectResult> InspectAsync(string deviceCode, CancellationToken cancellationToken)
+    {
+        var inspectAt = DateTimeOffset.Now;
+        logger.LogInformation("Starting single-device inspect for {DeviceCode}.", deviceCode);
+
+        try
+        {
+            var flow = await PrepareCoreAsync(deviceCode, inspectAt, cancellationToken);
+            logger.LogInformation(
+                "Inspect online status result for {DeviceCode}. StatusResolved={StatusResolved}, OnlineStatus={OnlineStatus}.",
+                flow.DeviceCode,
+                flow.StatusResolved,
+                flow.OnlineStatus);
+            logger.LogInformation(
+                "Inspect RTSP result for {DeviceCode}. RtspReady={RtspReady}, AddressStatus={AddressStatus}.",
+                flow.DeviceCode,
+                flow.RtspReady,
+                flow.AddressStatusText);
+
+            InspectResult result;
+            if (!flow.DeviceFound)
+            {
+                result = BuildInspectResult(
+                    flow,
+                    statusResolved: false,
+                    onlineStatus: "未找到本地点位",
+                    rtspReady: false,
+                    playbackStarted: false,
+                    enteredPlaying: false,
+                    conclusion: "巡检失败：本地点位不存在",
+                    failureCategory: "本地点位不存在",
+                    detailMessage: flow.DiagnosisText);
+            }
+            else if (!flow.StatusResolved)
+            {
+                result = BuildInspectResult(
+                    flow,
+                    statusResolved: false,
+                    onlineStatus: "未获取",
+                    rtspReady: false,
+                    playbackStarted: false,
+                    enteredPlaying: false,
+                    conclusion: "巡检失败：设备状态未获取",
+                    failureCategory: ExtractStatusFailureCategory(flow.DiagnosisText),
+                    detailMessage: flow.DiagnosisText);
+            }
+            else if (flow.OnlineStatus is not 1)
+            {
+                result = BuildInspectResult(
+                    flow,
+                    statusResolved: true,
+                    onlineStatus: BuildOnlineStatusText(flow.OnlineStatus),
+                    rtspReady: false,
+                    playbackStarted: false,
+                    enteredPlaying: false,
+                    conclusion: BuildNonPlayingConclusion(flow.OnlineStatus),
+                    failureCategory: BuildNonPlayingFailureCategory(flow.OnlineStatus),
+                    detailMessage: flow.DiagnosisText);
+            }
+            else if (!flow.RtspReady || string.IsNullOrWhiteSpace(flow.RtspUrl))
+            {
+                result = BuildInspectResult(
+                    flow,
+                    statusResolved: true,
+                    onlineStatus: BuildOnlineStatusText(flow.OnlineStatus),
+                    rtspReady: false,
+                    playbackStarted: false,
+                    enteredPlaying: false,
+                    conclusion: "巡检失败：RTSP 地址未就绪",
+                    failureCategory: ExtractRtspFailureCategory(flow.AddressStatusText),
+                    detailMessage: flow.AddressStatusText);
+            }
+            else
+            {
+                logger.LogInformation(
+                    "Inspect playback stage started for {DeviceCode}. Rtsp={RtspUrl}",
+                    flow.DeviceCode,
+                    MaskUrl(flow.RtspUrl));
+
+                var probeResult = await playProbe.ProbeAsync(
+                    new PlayProbeArgs(flow.DeviceName, flow.DeviceCode, flow.RtspUrl!),
+                    cancellationToken);
+                result = BuildPlaybackInspectResult(flow, probeResult);
+
+                if (result.EnteredPlaying)
+                {
+                    logger.LogInformation(
+                        "Inspect playback entered playing for {DeviceCode}. Conclusion={Conclusion}.",
+                        flow.DeviceCode,
+                        result.Conclusion);
+                }
+                else
+                {
+                    logger.LogWarning(
+                        "Inspect playback failed for {DeviceCode}. FailureCategory={FailureCategory}.",
+                        flow.DeviceCode,
+                        result.FailureCategory);
+                }
+            }
+
+            logger.LogInformation(
+                "Inspect completed for {DeviceCode}. Conclusion={Conclusion}, FailureCategory={FailureCategory}.",
+                result.DeviceCode,
+                result.Conclusion,
+                string.IsNullOrWhiteSpace(result.FailureCategory) ? "无" : result.FailureCategory);
+
+            return result;
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Unexpected single-device inspect failure for {DeviceCode}.", deviceCode);
+            return new InspectResult(
+                inspectAt,
+                "未知设备",
+                deviceCode,
+                false,
+                "未获取",
+                false,
+                false,
+                false,
+                "巡检失败：巡检执行异常",
+                "巡检执行异常",
+                $"最小巡检诊断失败：{exception.Message}");
         }
     }
 
@@ -168,6 +246,98 @@ public sealed class PreviewService(
             requestedAt);
     }
 
+    private async Task<PreviewFlow> PrepareCoreAsync(
+        string deviceCode,
+        DateTimeOffset requestedAt,
+        CancellationToken cancellationToken)
+    {
+        var devices = await mapStore.GetDevicesAsync(cancellationToken);
+        var device = devices.FirstOrDefault(item => string.Equals(item.DeviceCode, deviceCode, StringComparison.OrdinalIgnoreCase));
+        if (device is null)
+        {
+            return new PreviewFlow(
+                false,
+                deviceCode,
+                "未知设备",
+                false,
+                null,
+                "本地点位不存在，请先完成同步",
+                false,
+                "未发起预览地址获取",
+                null,
+                "平台未返回有效期",
+                requestedAt);
+        }
+
+        var statusResult = await openPlatformClient.GetDeviceStatusAsync(device.DeviceCode, cancellationToken);
+        if (!statusResult.Success || statusResult.Payload is null)
+        {
+            return new PreviewFlow(
+                true,
+                device.DeviceCode,
+                device.DeviceName,
+                false,
+                null,
+                BuildStatusFailureMessage(statusResult.BuildMessage()),
+                false,
+                "未发起预览地址获取",
+                null,
+                "平台未返回有效期",
+                requestedAt);
+        }
+
+        var diagnosisText = BuildDiagnosisText(statusResult.Payload.OnlineStatus);
+        if (statusResult.Payload.OnlineStatus is not 1)
+        {
+            return new PreviewFlow(
+                true,
+                device.DeviceCode,
+                device.DeviceName,
+                true,
+                statusResult.Payload.OnlineStatus,
+                diagnosisText,
+                false,
+                "未发起预览地址获取",
+                null,
+                "平台未返回有效期",
+                requestedAt);
+        }
+
+        var previewResult = await openPlatformClient.GetDevicePreviewUrlAsync(device.DeviceCode, cancellationToken);
+        if (!previewResult.Success || previewResult.Payload is null || string.IsNullOrWhiteSpace(previewResult.Payload.Url))
+        {
+            return new PreviewFlow(
+                true,
+                device.DeviceCode,
+                device.DeviceName,
+                true,
+                statusResult.Payload.OnlineStatus,
+                diagnosisText,
+                false,
+                BuildPreviewFailureMessage(previewResult.BuildMessage()),
+                null,
+                "平台未返回有效期",
+                requestedAt);
+        }
+
+        var expireText = string.IsNullOrWhiteSpace(previewResult.Payload.ExpireTime)
+            ? "平台未返回有效期"
+            : $"平台返回：{previewResult.Payload.ExpireTime}";
+
+        return new PreviewFlow(
+            true,
+            device.DeviceCode,
+            device.DeviceName,
+            true,
+            statusResult.Payload.OnlineStatus,
+            diagnosisText,
+            true,
+            "预览地址已就绪",
+            previewResult.Payload.Url,
+            expireText,
+            requestedAt);
+    }
+
     private static string BuildDiagnosisText(int? onlineStatus)
     {
         return onlineStatus switch
@@ -177,6 +347,18 @@ public sealed class PreviewService(
             2 => "设备休眠，当前不进入预览",
             3 => "设备休眠，当前不进入预览",
             _ => "设备状态未知，当前不进入预览"
+        };
+    }
+
+    private static string BuildOnlineStatusText(int? onlineStatus)
+    {
+        return onlineStatus switch
+        {
+            1 => "在线",
+            0 => "离线",
+            2 => "休眠（普通）",
+            3 => "休眠（保活/AOV）",
+            _ => "未知"
         };
     }
 
@@ -205,6 +387,124 @@ public sealed class PreviewService(
         return $"获取预览地址失败：{message}";
     }
 
+    private static InspectResult BuildInspectResult(
+        PreviewFlow flow,
+        bool statusResolved,
+        string onlineStatus,
+        bool rtspReady,
+        bool playbackStarted,
+        bool enteredPlaying,
+        string conclusion,
+        string failureCategory,
+        string detailMessage)
+    {
+        return new InspectResult(
+            flow.RequestedAt,
+            flow.DeviceName,
+            flow.DeviceCode,
+            statusResolved,
+            onlineStatus,
+            rtspReady,
+            playbackStarted,
+            enteredPlaying,
+            conclusion,
+            failureCategory,
+            detailMessage);
+    }
+
+    private static InspectResult BuildPlaybackInspectResult(PreviewFlow flow, PlayProbeResult probeResult)
+    {
+        if (probeResult.EnteredPlaying)
+        {
+            return BuildInspectResult(
+                flow,
+                statusResolved: true,
+                onlineStatus: BuildOnlineStatusText(flow.OnlineStatus),
+                rtspReady: true,
+                playbackStarted: probeResult.PlaybackStarted || probeResult.EnteredPlaying,
+                enteredPlaying: true,
+                conclusion: "巡检通过",
+                failureCategory: string.Empty,
+                detailMessage: "播放器已进入 Playing 播放态；当前轮仅确认播放态，实际画面仍需人工复核。");
+        }
+
+        var failureCategory = string.IsNullOrWhiteSpace(probeResult.FailureCategory)
+            ? "播放建链失败"
+            : probeResult.FailureCategory;
+
+        return BuildInspectResult(
+            flow,
+            statusResolved: true,
+            onlineStatus: BuildOnlineStatusText(flow.OnlineStatus),
+            rtspReady: true,
+            playbackStarted: probeResult.PlaybackStarted,
+            enteredPlaying: false,
+            conclusion: failureCategory switch
+            {
+                "播放初始化失败" => "巡检失败：播放初始化失败",
+                "播放建链失败" => "巡检失败：播放建链失败",
+                "播放过程中断" => "巡检失败：播放过程中断",
+                "地址可能失效" => "巡检失败：地址可能失效",
+                _ => "巡检失败：播放建链失败"
+            },
+            failureCategory: failureCategory,
+            detailMessage: probeResult.DetailMessage);
+    }
+
+    private static string BuildNonPlayingConclusion(int? onlineStatus)
+    {
+        return onlineStatus switch
+        {
+            0 => "巡检失败：设备离线",
+            2 => "巡检失败：设备休眠",
+            3 => "巡检失败：设备休眠",
+            _ => "巡检失败：设备状态未知"
+        };
+    }
+
+    private static string BuildNonPlayingFailureCategory(int? onlineStatus)
+    {
+        return onlineStatus switch
+        {
+            0 => "设备离线",
+            2 => "设备休眠",
+            3 => "设备休眠",
+            _ => "设备状态未知"
+        };
+    }
+
+    private static string ExtractStatusFailureCategory(string message)
+    {
+        return message.Contains("accessToken", StringComparison.OrdinalIgnoreCase)
+            ? "accessToken 获取失败"
+            : "状态查询失败";
+    }
+
+    private static string ExtractRtspFailureCategory(string message)
+    {
+        if (message.Contains("accessToken", StringComparison.OrdinalIgnoreCase))
+        {
+            return "accessToken 获取失败";
+        }
+
+        if (message.Contains("RTSP 响应解密失败", StringComparison.Ordinal))
+        {
+            return "RTSP 响应解密失败";
+        }
+
+        if (message.Contains("RTSP 解密后 JSON 解析失败", StringComparison.Ordinal))
+        {
+            return "RTSP 解密后 JSON 解析失败";
+        }
+
+        if (message.Contains("RTSP 返回缺少 url", StringComparison.Ordinal))
+        {
+            return "RTSP 返回缺少 url";
+        }
+
+        return "RTSP 接口业务失败";
+    }
+
     private static string BuildSqliteMessage(Exception exception)
     {
         var message = exception.Message;
@@ -222,4 +522,29 @@ public sealed class PreviewService(
 
         return $"本地点位读取失败：{message}";
     }
+
+    private static string MaskUrl(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        return value.Length <= 12
+            ? "****"
+            : $"{value[..6]}****{value[^6..]}";
+    }
+
+    private sealed record PreviewFlow(
+        bool DeviceFound,
+        string DeviceCode,
+        string DeviceName,
+        bool StatusResolved,
+        int? OnlineStatus,
+        string DiagnosisText,
+        bool RtspReady,
+        string AddressStatusText,
+        string? RtspUrl,
+        string ExpireText,
+        DateTimeOffset RequestedAt);
 }

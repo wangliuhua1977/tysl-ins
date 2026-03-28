@@ -145,6 +145,7 @@ public partial class App : System.Windows.Application
                 services.AddSingleton<MapPageViewModel>();
                 services.AddSingleton<PreviewPageViewModel>();
                 services.AddSingleton<ThemeSettingsPageViewModel>();
+                services.AddSingleton<IPlayProbe, PlayProbeSvc>();
                 services.AddSingleton<IPlayWinSvc, PlayWinSvc>();
                 services.AddTransient<VlcPlaySvc>();
             })

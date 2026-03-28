@@ -18,11 +18,11 @@
                 <TextBlock FontSize="24"
                            FontWeight="SemiBold"
                            Foreground="White"
-                           Text="单点视频预览" />
+                           Text="单点预览与巡检诊断" />
                 <TextBlock Margin="0,8,0,0"
                            Foreground="#F3F4F6"
                            TextWrapping="Wrap"
-                           Text="从本地 SQLite 选择一个点位，先做设备状态诊断，再获取 RTSP 预览地址。" />
+                           Text="从本地 SQLite 选择一个点位，可继续做单点预览，也可直接执行一次最小巡检诊断。" />
                 <TextBlock Margin="0,8,0,0"
                            Foreground="#DDE7F2"
                            TextWrapping="Wrap"
@@ -67,6 +67,11 @@
 
                     <Button Margin="0,12,0,0"
                             Padding="16,10"
+                            Command="{Binding RequestInspectCommand}"
+                            Content="巡检诊断" />
+
+                    <Button Margin="0,12,0,0"
+                            Padding="16,10"
                             Command="{Binding OpenPlayWinCommand}"
                             Content="打开播放窗口" />
 
@@ -74,6 +79,59 @@
                                Foreground="{DynamicResource SecondaryTextBrush}"
                                TextWrapping="Wrap"
                                Text="{Binding PlayWindowHintText}" />
+
+                    <Border Margin="0,20,0,0"
+                            Padding="16"
+                            Background="{DynamicResource WindowBackgroundBrush}"
+                            BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="16">
+                        <StackPanel>
+                            <TextBlock FontSize="16"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource PrimaryTextBrush}"
+                                       Text="最小巡检诊断结果" />
+
+                            <TextBlock Margin="0,12,0,0"
+                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                       Text="诊断结论" />
+                            <TextBlock Margin="0,4,0,0"
+                                       Foreground="{DynamicResource PrimaryTextBrush}"
+                                       TextWrapping="Wrap"
+                                       Text="{Binding InspectConclusion}" />
+
+                            <TextBlock Margin="0,12,0,0"
+                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                       Text="失败分类" />
+                            <TextBlock Margin="0,4,0,0"
+                                       Foreground="{DynamicResource PrimaryTextBrush}"
+                                       TextWrapping="Wrap"
+                                       Text="{Binding InspectFailureCategory}" />
+
+                            <TextBlock Margin="0,12,0,0"
+                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                       Text="阶段状态" />
+                            <TextBlock Margin="0,4,0,0"
+                                       Foreground="{DynamicResource PrimaryTextBrush}"
+                                       TextWrapping="Wrap"
+                                       Text="{Binding InspectStageText}" />
+
+                            <TextBlock Margin="0,12,0,0"
+                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                       Text="最小诊断信息" />
+                            <TextBlock Margin="0,4,0,0"
+                                       Foreground="{DynamicResource PrimaryTextBrush}"
+                                       TextWrapping="Wrap"
+                                       Text="{Binding InspectDetailText}" />
+
+                            <TextBlock Margin="0,12,0,0"
+                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                       Text="巡检时间" />
+                            <TextBlock Margin="0,4,0,0"
+                                       Foreground="{DynamicResource PrimaryTextBrush}"
+                                       Text="{Binding InspectAtText}" />
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
             </Border>
 

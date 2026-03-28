@@ -59,6 +59,41 @@ public sealed class PreviewPageViewModelTests
         Assert.Equal("rtsp://demo/live/dev-001", opened.RtspUrl);
     }
 
+    [Fact]
+    public async Task RequestInspectAsync_UpdatesInspectSummary()
+    {
+        var previewService = new StubPreviewService
+        {
+            InspectResult = new InspectResult(
+                DateTimeOffset.Parse("2026-03-28T10:05:00+08:00"),
+                "测试设备",
+                "dev-001",
+                true,
+                "在线",
+                true,
+                true,
+                false,
+                "巡检失败：播放建链失败",
+                "播放建链失败",
+                "播放器未能完成播放建链。")
+        };
+        var viewModel = new PreviewPageViewModel(
+            previewService,
+            new StubPlayWinSvc(),
+            NullLogger<PreviewPageViewModel>.Instance);
+
+        await viewModel.InitializeAsync();
+        await viewModel.RequestInspectCommand.ExecuteAsync(null);
+
+        Assert.Equal("巡检失败：播放建链失败", viewModel.InspectConclusion);
+        Assert.Equal("播放建链失败", viewModel.InspectFailureCategory);
+        Assert.Contains("在线状态：在线", viewModel.InspectStageText);
+        Assert.Contains("播放建链：已启动", viewModel.InspectStageText);
+        Assert.Contains("Playing：未进入", viewModel.InspectStageText);
+        Assert.Equal("播放器未能完成播放建链。", viewModel.InspectDetailText);
+        Assert.Equal("2026-03-28 10:05:00", viewModel.InspectAtText);
+    }
+
     [Theory]
     [InlineData(PlayStage.Initializing, "正在初始化播放器")]
     [InlineData(PlayStage.Connecting, "正在建立播放链路")]
@@ -67,6 +102,7 @@ public sealed class PreviewPageViewModelTests
     [InlineData(PlayStage.InitFailed, "播放初始化失败")]
     [InlineData(PlayStage.LinkFailed, "播放建链失败")]
     [InlineData(PlayStage.Interrupted, "播放过程中断")]
+    [InlineData(PlayStage.AddressExpired, "地址可能失效")]
     public void PlayText_ToStatus_ReturnsExpectedChineseText(PlayStage stage, string expected)
     {
         Assert.Equal(expected, PlayText.ToStatus(stage));
@@ -84,6 +120,19 @@ public sealed class PreviewPageViewModelTests
             "平台未返回有效期",
             DateTimeOffset.Parse("2026-03-28T10:00:00+08:00"));
 
+        public InspectResult InspectResult { get; set; } = new(
+            DateTimeOffset.Parse("2026-03-28T10:00:00+08:00"),
+            "测试设备",
+            "dev-001",
+            false,
+            "未获取",
+            false,
+            false,
+            false,
+            "尚未发起巡检诊断",
+            "暂无",
+            "仅在发起巡检诊断后展示最小结果。");
+
         public Task<PreviewDeviceLoadResult> LoadLocalDevicesAsync(CancellationToken cancellationToken)
         {
             return Task.FromResult(
@@ -96,6 +145,11 @@ public sealed class PreviewPageViewModelTests
         public Task<PreviewPrepareResult> PrepareAsync(string deviceCode, CancellationToken cancellationToken)
         {
             return Task.FromResult(PrepareResult);
+        }
+
+        public Task<InspectResult> InspectAsync(string deviceCode, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(InspectResult);
         }
     }
 

@@ -50,6 +50,13 @@ public interface IPreviewService
     Task<PreviewDeviceLoadResult> LoadLocalDevicesAsync(CancellationToken cancellationToken);
 
     Task<PreviewPrepareResult> PrepareAsync(string deviceCode, CancellationToken cancellationToken);
+
+    Task<InspectResult> InspectAsync(string deviceCode, CancellationToken cancellationToken);
+}
+
+public interface IPlayProbe
+{
+    Task<PlayProbeResult> ProbeAsync(PlayProbeArgs args, CancellationToken cancellationToken);
 }
 
 public sealed record MapLoadResult(
@@ -79,3 +86,27 @@ public sealed record PreviewPrepareResult(
     string? RtspUrl,
     string ExpireText,
     DateTimeOffset RequestedAt);
+
+public sealed record PlayProbeArgs(
+    string DeviceName,
+    string DeviceCode,
+    string RtspUrl);
+
+public sealed record PlayProbeResult(
+    bool PlaybackStarted,
+    bool EnteredPlaying,
+    string FailureCategory,
+    string DetailMessage);
+
+public sealed record InspectResult(
+    DateTimeOffset InspectAt,
+    string DeviceName,
+    string DeviceCode,
+    bool StatusResolved,
+    string OnlineStatus,
+    bool RtspReady,
+    bool PlaybackStarted,
+    bool EnteredPlaying,
+    string Conclusion,
+    string FailureCategory,
+    string DetailMessage);

@@ -20,7 +20,7 @@ public sealed class PreviewServiceTests
                 Payload = new OpenPlatformDeviceStatusPayload("dev-001", 0)
             }
         };
-        var service = new PreviewService(new InMemoryMapStore(), client, NullLogger<PreviewService>.Instance);
+        var service = new PreviewService(new InMemoryMapStore(), client, new StubPlayProbe(), NullLogger<PreviewService>.Instance);
 
         var result = await service.PrepareAsync("dev-001", CancellationToken.None);
 
@@ -42,7 +42,7 @@ public sealed class PreviewServiceTests
                 Payload = new OpenPlatformDeviceStatusPayload("dev-001", 2)
             }
         };
-        var service = new PreviewService(new InMemoryMapStore(), client, NullLogger<PreviewService>.Instance);
+        var service = new PreviewService(new InMemoryMapStore(), client, new StubPlayProbe(), NullLogger<PreviewService>.Instance);
 
         var result = await service.PrepareAsync("dev-001", CancellationToken.None);
 
@@ -63,7 +63,7 @@ public sealed class PreviewServiceTests
                 ErrorMessage = "接口超时"
             }
         };
-        var service = new PreviewService(new InMemoryMapStore(), client, NullLogger<PreviewService>.Instance);
+        var service = new PreviewService(new InMemoryMapStore(), client, new StubPlayProbe(), NullLogger<PreviewService>.Instance);
 
         var result = await service.PrepareAsync("dev-001", CancellationToken.None);
 
@@ -90,7 +90,7 @@ public sealed class PreviewServiceTests
                 Payload = new OpenPlatformPreviewUrlPayload("rtsp://demo/live/dev-001", "600 秒")
             }
         };
-        var service = new PreviewService(new InMemoryMapStore(), client, NullLogger<PreviewService>.Instance);
+        var service = new PreviewService(new InMemoryMapStore(), client, new StubPlayProbe(), NullLogger<PreviewService>.Instance);
 
         var result = await service.PrepareAsync("dev-001", CancellationToken.None);
 
@@ -119,7 +119,7 @@ public sealed class PreviewServiceTests
                 ErrorMessage = "RTSP 响应解密失败"
             }
         };
-        var service = new PreviewService(new InMemoryMapStore(), client, NullLogger<PreviewService>.Instance);
+        var service = new PreviewService(new InMemoryMapStore(), client, new StubPlayProbe(), NullLogger<PreviewService>.Instance);
 
         var result = await service.PrepareAsync("dev-001", CancellationToken.None);
 
@@ -127,6 +127,107 @@ public sealed class PreviewServiceTests
         Assert.Equal("在线：可请求预览地址", result.DiagnosisText);
         Assert.Equal("RTSP 响应解密失败", result.AddressStatusText);
         Assert.True(client.PreviewUrlRequested);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ReturnsOfflineConclusion_WhenDeviceIsOffline()
+    {
+        var client = new StubOpenPlatformClient
+        {
+            DeviceStatusResult = new OpenPlatformCallResult<OpenPlatformDeviceStatusPayload>
+            {
+                Success = true,
+                EndpointName = "getDeviceStatus",
+                Payload = new OpenPlatformDeviceStatusPayload("dev-001", 0)
+            }
+        };
+        var probe = new StubPlayProbe();
+        var service = new PreviewService(new InMemoryMapStore(), client, probe, NullLogger<PreviewService>.Instance);
+
+        var result = await service.InspectAsync("dev-001", CancellationToken.None);
+
+        Assert.True(result.StatusResolved);
+        Assert.Equal("离线", result.OnlineStatus);
+        Assert.False(result.RtspReady);
+        Assert.False(result.PlaybackStarted);
+        Assert.False(result.EnteredPlaying);
+        Assert.Equal("巡检失败：设备离线", result.Conclusion);
+        Assert.Equal("设备离线", result.FailureCategory);
+        Assert.False(client.PreviewUrlRequested);
+        Assert.False(probe.ProbeRequested);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ReturnsRtspNotReadyConclusion_WhenPreviewUrlIsNotReady()
+    {
+        var client = new StubOpenPlatformClient
+        {
+            DeviceStatusResult = new OpenPlatformCallResult<OpenPlatformDeviceStatusPayload>
+            {
+                Success = true,
+                EndpointName = "getDeviceStatus",
+                Payload = new OpenPlatformDeviceStatusPayload("dev-001", 1)
+            },
+            PreviewUrlResult = new OpenPlatformCallResult<OpenPlatformPreviewUrlPayload>
+            {
+                Success = false,
+                EndpointName = "getDeviceMediaUrlRtsp",
+                ErrorMessage = "RTSP 响应解密失败"
+            }
+        };
+        var probe = new StubPlayProbe();
+        var service = new PreviewService(new InMemoryMapStore(), client, probe, NullLogger<PreviewService>.Instance);
+
+        var result = await service.InspectAsync("dev-001", CancellationToken.None);
+
+        Assert.True(result.StatusResolved);
+        Assert.Equal("在线", result.OnlineStatus);
+        Assert.False(result.RtspReady);
+        Assert.Equal("巡检失败：RTSP 地址未就绪", result.Conclusion);
+        Assert.Equal("RTSP 响应解密失败", result.FailureCategory);
+        Assert.Equal("RTSP 响应解密失败", result.DetailMessage);
+        Assert.True(client.PreviewUrlRequested);
+        Assert.False(probe.ProbeRequested);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ReturnsPassConclusion_WhenProbeEntersPlaying()
+    {
+        var client = new StubOpenPlatformClient
+        {
+            DeviceStatusResult = new OpenPlatformCallResult<OpenPlatformDeviceStatusPayload>
+            {
+                Success = true,
+                EndpointName = "getDeviceStatus",
+                Payload = new OpenPlatformDeviceStatusPayload("dev-001", 1)
+            },
+            PreviewUrlResult = new OpenPlatformCallResult<OpenPlatformPreviewUrlPayload>
+            {
+                Success = true,
+                EndpointName = "getDeviceMediaUrlRtsp",
+                Payload = new OpenPlatformPreviewUrlPayload("rtsp://demo/live/dev-001", "600 秒")
+            }
+        };
+        var probe = new StubPlayProbe
+        {
+            ProbeResult = new PlayProbeResult(
+                true,
+                true,
+                string.Empty,
+                "播放器已进入 Playing 播放态。")
+        };
+        var service = new PreviewService(new InMemoryMapStore(), client, probe, NullLogger<PreviewService>.Instance);
+
+        var result = await service.InspectAsync("dev-001", CancellationToken.None);
+
+        Assert.True(result.StatusResolved);
+        Assert.Equal("在线", result.OnlineStatus);
+        Assert.True(result.RtspReady);
+        Assert.True(result.PlaybackStarted);
+        Assert.True(result.EnteredPlaying);
+        Assert.Equal("巡检通过", result.Conclusion);
+        Assert.Equal(string.Empty, result.FailureCategory);
+        Assert.True(probe.ProbeRequested);
     }
 
     private sealed class StubOpenPlatformClient : IOpenPlatformClient
@@ -203,6 +304,23 @@ public sealed class PreviewServiceTests
         {
             PreviewUrlRequested = true;
             return Task.FromResult(PreviewUrlResult);
+        }
+    }
+
+    private sealed class StubPlayProbe : IPlayProbe
+    {
+        public bool ProbeRequested { get; private set; }
+
+        public PlayProbeResult ProbeResult { get; set; } = new(
+            true,
+            true,
+            string.Empty,
+            "播放器已进入 Playing 播放态。");
+
+        public Task<PlayProbeResult> ProbeAsync(PlayProbeArgs args, CancellationToken cancellationToken)
+        {
+            ProbeRequested = true;
+            return Task.FromResult(ProbeResult);
         }
     }
 
