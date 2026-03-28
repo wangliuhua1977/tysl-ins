@@ -98,6 +98,14 @@ public sealed record PlayProbeResult(
     string FailureCategory,
     string DetailMessage);
 
+public enum InspectAbnormalClass
+{
+    None = 0,
+    Offline = 1,
+    RtspNotReady = 2,
+    PlayFailed = 3
+}
+
 public sealed record InspectResult(
     DateTimeOffset InspectAt,
     string DeviceName,
@@ -109,4 +117,17 @@ public sealed record InspectResult(
     bool EnteredPlaying,
     string Conclusion,
     string FailureCategory,
-    string DetailMessage);
+    string DetailMessage,
+    InspectAbnormalClass AbnormalClass)
+{
+    public bool IsAbnormal => !string.Equals(Conclusion, "巡检通过", StringComparison.Ordinal);
+
+    public string AbnormalClassText => AbnormalClass switch
+    {
+        InspectAbnormalClass.Offline => "离线",
+        InspectAbnormalClass.RtspNotReady => "RTSP 未就绪",
+        InspectAbnormalClass.PlayFailed => "播放失败",
+        _ when IsAbnormal => "文档未说明，需人工确认",
+        _ => "无异常/巡检通过"
+    };
+}

@@ -75,7 +75,8 @@ public sealed class PreviewPageViewModelTests
                 false,
                 "巡检失败：播放建链失败",
                 "播放建链失败",
-                "播放器未能完成播放建链。")
+                "播放器未能完成播放建链。",
+                InspectAbnormalClass.PlayFailed)
         };
         var viewModel = new PreviewPageViewModel(
             previewService,
@@ -86,6 +87,7 @@ public sealed class PreviewPageViewModelTests
         await viewModel.RequestInspectCommand.ExecuteAsync(null);
 
         Assert.Equal("巡检失败：播放建链失败", viewModel.InspectConclusion);
+        Assert.Equal("播放失败", viewModel.InspectAbnormalClassText);
         Assert.Equal("播放建链失败", viewModel.InspectFailureCategory);
         Assert.Contains("在线状态：在线", viewModel.InspectStageText);
         Assert.Contains("播放建链：已启动", viewModel.InspectStageText);
@@ -131,7 +133,8 @@ public sealed class PreviewPageViewModelTests
             false,
             "尚未发起巡检诊断",
             "暂无",
-            "仅在发起巡检诊断后展示最小结果。");
+            "仅在发起巡检诊断后展示最小结果。",
+            InspectAbnormalClass.None);
 
         public Task<PreviewDeviceLoadResult> LoadLocalDevicesAsync(CancellationToken cancellationToken)
         {

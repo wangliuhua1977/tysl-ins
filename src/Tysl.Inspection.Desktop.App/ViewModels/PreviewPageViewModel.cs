@@ -53,6 +53,9 @@ public sealed partial class PreviewPageViewModel(
     private string inspectFailureCategory = "暂无";
 
     [ObservableProperty]
+    private string inspectAbnormalClassText = "暂无";
+
+    [ObservableProperty]
     private string inspectStageText = "在线状态：暂无 | RTSP：未校验 | 播放建链：未启动 | Playing：未进入";
 
     [ObservableProperty]
@@ -184,7 +187,8 @@ public sealed partial class PreviewPageViewModel(
                     false,
                     "巡检失败：巡检执行异常",
                     "巡检执行异常",
-                    $"最小巡检诊断失败：{exception.Message}"));
+                    $"最小巡检诊断失败：{exception.Message}",
+                    InspectAbnormalClass.None));
             PageStatusText = "最小巡检诊断失败。";
         }
         finally
@@ -294,6 +298,7 @@ public sealed partial class PreviewPageViewModel(
         DeviceName = result.DeviceName;
         DeviceCode = result.DeviceCode;
         InspectConclusion = result.Conclusion;
+        InspectAbnormalClassText = result.AbnormalClassText;
         InspectFailureCategory = string.IsNullOrWhiteSpace(result.FailureCategory) ? "无" : result.FailureCategory;
         InspectStageText =
             $"在线状态：{result.OnlineStatus} | RTSP：{(result.RtspReady ? "已就绪" : "未就绪")} | 播放建链：{(result.PlaybackStarted ? "已启动" : "未启动")} | Playing：{(result.EnteredPlaying ? "已进入" : "未进入")}";
@@ -304,6 +309,7 @@ public sealed partial class PreviewPageViewModel(
     private void ResetInspectResult()
     {
         InspectConclusion = "尚未发起巡检诊断";
+        InspectAbnormalClassText = "暂无";
         InspectFailureCategory = "暂无";
         InspectStageText = "在线状态：暂无 | RTSP：未校验 | 播放建链：未启动 | Playing：未进入";
         InspectDetailText = "仅在发起巡检诊断后展示最小结果。";

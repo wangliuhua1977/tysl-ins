@@ -153,6 +153,9 @@ public sealed class PreviewServiceTests
         Assert.False(result.EnteredPlaying);
         Assert.Equal("巡检失败：设备离线", result.Conclusion);
         Assert.Equal("设备离线", result.FailureCategory);
+        Assert.True(result.IsAbnormal);
+        Assert.Equal(InspectAbnormalClass.Offline, result.AbnormalClass);
+        Assert.Equal("离线", result.AbnormalClassText);
         Assert.False(client.PreviewUrlRequested);
         Assert.False(probe.ProbeRequested);
     }
@@ -186,8 +189,54 @@ public sealed class PreviewServiceTests
         Assert.Equal("巡检失败：RTSP 地址未就绪", result.Conclusion);
         Assert.Equal("RTSP 响应解密失败", result.FailureCategory);
         Assert.Equal("RTSP 响应解密失败", result.DetailMessage);
+        Assert.True(result.IsAbnormal);
+        Assert.Equal(InspectAbnormalClass.RtspNotReady, result.AbnormalClass);
+        Assert.Equal("RTSP 未就绪", result.AbnormalClassText);
         Assert.True(client.PreviewUrlRequested);
         Assert.False(probe.ProbeRequested);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ReturnsPlayFailedClass_WhenProbeFailsBeforePlaying()
+    {
+        var client = new StubOpenPlatformClient
+        {
+            DeviceStatusResult = new OpenPlatformCallResult<OpenPlatformDeviceStatusPayload>
+            {
+                Success = true,
+                EndpointName = "getDeviceStatus",
+                Payload = new OpenPlatformDeviceStatusPayload("dev-001", 1)
+            },
+            PreviewUrlResult = new OpenPlatformCallResult<OpenPlatformPreviewUrlPayload>
+            {
+                Success = true,
+                EndpointName = "getDeviceMediaUrlRtsp",
+                Payload = new OpenPlatformPreviewUrlPayload("rtsp://demo/live/dev-001", "600 秒")
+            }
+        };
+        var probe = new StubPlayProbe
+        {
+            ProbeResult = new PlayProbeResult(
+                true,
+                false,
+                "播放建链失败",
+                "播放器未能完成播放建链。")
+        };
+        var service = new PreviewService(new InMemoryMapStore(), client, probe, NullLogger<PreviewService>.Instance);
+
+        var result = await service.InspectAsync("dev-001", CancellationToken.None);
+
+        Assert.True(result.StatusResolved);
+        Assert.True(result.RtspReady);
+        Assert.True(result.PlaybackStarted);
+        Assert.False(result.EnteredPlaying);
+        Assert.Equal("巡检失败：播放建链失败", result.Conclusion);
+        Assert.Equal("播放建链失败", result.FailureCategory);
+        Assert.Equal("播放器未能完成播放建链。", result.DetailMessage);
+        Assert.True(result.IsAbnormal);
+        Assert.Equal(InspectAbnormalClass.PlayFailed, result.AbnormalClass);
+        Assert.Equal("播放失败", result.AbnormalClassText);
+        Assert.True(probe.ProbeRequested);
     }
 
     [Fact]
@@ -227,6 +276,9 @@ public sealed class PreviewServiceTests
         Assert.True(result.EnteredPlaying);
         Assert.Equal("巡检通过", result.Conclusion);
         Assert.Equal(string.Empty, result.FailureCategory);
+        Assert.False(result.IsAbnormal);
+        Assert.Equal(InspectAbnormalClass.None, result.AbnormalClass);
+        Assert.Equal("无异常/巡检通过", result.AbnormalClassText);
         Assert.True(probe.ProbeRequested);
     }
 

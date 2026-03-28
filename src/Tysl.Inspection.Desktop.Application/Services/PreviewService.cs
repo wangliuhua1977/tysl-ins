@@ -130,7 +130,8 @@ public sealed class PreviewService(
                     enteredPlaying: false,
                     conclusion: "巡检失败：本地点位不存在",
                     failureCategory: "本地点位不存在",
-                    detailMessage: flow.DiagnosisText);
+                    detailMessage: flow.DiagnosisText,
+                    abnormalClass: InspectAbnormalClass.None);
             }
             else if (!flow.StatusResolved)
             {
@@ -143,7 +144,8 @@ public sealed class PreviewService(
                     enteredPlaying: false,
                     conclusion: "巡检失败：设备状态未获取",
                     failureCategory: ExtractStatusFailureCategory(flow.DiagnosisText),
-                    detailMessage: flow.DiagnosisText);
+                    detailMessage: flow.DiagnosisText,
+                    abnormalClass: InspectAbnormalClass.None);
             }
             else if (flow.OnlineStatus is not 1)
             {
@@ -156,7 +158,8 @@ public sealed class PreviewService(
                     enteredPlaying: false,
                     conclusion: BuildNonPlayingConclusion(flow.OnlineStatus),
                     failureCategory: BuildNonPlayingFailureCategory(flow.OnlineStatus),
-                    detailMessage: flow.DiagnosisText);
+                    detailMessage: flow.DiagnosisText,
+                    abnormalClass: InspectAbnormalClass.Offline);
             }
             else if (!flow.RtspReady || string.IsNullOrWhiteSpace(flow.RtspUrl))
             {
@@ -169,7 +172,8 @@ public sealed class PreviewService(
                     enteredPlaying: false,
                     conclusion: "巡检失败：RTSP 地址未就绪",
                     failureCategory: ExtractRtspFailureCategory(flow.AddressStatusText),
-                    detailMessage: flow.AddressStatusText);
+                    detailMessage: flow.AddressStatusText,
+                    abnormalClass: InspectAbnormalClass.RtspNotReady);
             }
             else
             {
@@ -199,11 +203,13 @@ public sealed class PreviewService(
                 }
             }
 
+            LogAbnormalClass(flow, result);
             logger.LogInformation(
-                "Inspect completed for {DeviceCode}. Conclusion={Conclusion}, FailureCategory={FailureCategory}.",
+                "Inspect completed for {DeviceCode}. Conclusion={Conclusion}, FailureCategory={FailureCategory}, AbnormalClass={AbnormalClass}.",
                 result.DeviceCode,
                 result.Conclusion,
-                string.IsNullOrWhiteSpace(result.FailureCategory) ? "无" : result.FailureCategory);
+                string.IsNullOrWhiteSpace(result.FailureCategory) ? "无" : result.FailureCategory,
+                result.AbnormalClassText);
 
             return result;
         }
@@ -221,7 +227,8 @@ public sealed class PreviewService(
                 false,
                 "巡检失败：巡检执行异常",
                 "巡检执行异常",
-                $"最小巡检诊断失败：{exception.Message}");
+                $"最小巡检诊断失败：{exception.Message}",
+                InspectAbnormalClass.None);
         }
     }
 
@@ -396,7 +403,8 @@ public sealed class PreviewService(
         bool enteredPlaying,
         string conclusion,
         string failureCategory,
-        string detailMessage)
+        string detailMessage,
+        InspectAbnormalClass abnormalClass)
     {
         return new InspectResult(
             flow.RequestedAt,
@@ -409,7 +417,8 @@ public sealed class PreviewService(
             enteredPlaying,
             conclusion,
             failureCategory,
-            detailMessage);
+            detailMessage,
+            abnormalClass);
     }
 
     private static InspectResult BuildPlaybackInspectResult(PreviewFlow flow, PlayProbeResult probeResult)
@@ -425,7 +434,8 @@ public sealed class PreviewService(
                 enteredPlaying: true,
                 conclusion: "巡检通过",
                 failureCategory: string.Empty,
-                detailMessage: "播放器已进入 Playing 播放态；当前轮仅确认播放态，实际画面仍需人工复核。");
+                detailMessage: "播放器已进入 Playing 播放态；当前轮仅确认播放态，实际画面仍需人工复核。",
+                abnormalClass: InspectAbnormalClass.None);
         }
 
         var failureCategory = string.IsNullOrWhiteSpace(probeResult.FailureCategory)
@@ -448,7 +458,27 @@ public sealed class PreviewService(
                 _ => "巡检失败：播放建链失败"
             },
             failureCategory: failureCategory,
-            detailMessage: probeResult.DetailMessage);
+            detailMessage: probeResult.DetailMessage,
+            abnormalClass: InspectAbnormalClass.PlayFailed);
+    }
+
+    private void LogAbnormalClass(PreviewFlow flow, InspectResult result)
+    {
+        logger.LogInformation(
+            "Inspect abnormal pre-class input for {DeviceCode}. StatusResolved={StatusResolved}, OnlineStatus={OnlineStatus}, RtspReady={RtspReady}, PlaybackStarted={PlaybackStarted}, EnteredPlaying={EnteredPlaying}, FailureCategory={FailureCategory}.",
+            flow.DeviceCode,
+            result.StatusResolved,
+            result.OnlineStatus,
+            result.RtspReady,
+            result.PlaybackStarted,
+            result.EnteredPlaying,
+            string.IsNullOrWhiteSpace(result.FailureCategory) ? "无" : result.FailureCategory);
+
+        logger.LogInformation(
+            "Inspect abnormal pre-class result for {DeviceCode}. AbnormalClass={AbnormalClass}, IsAbnormal={IsAbnormal}.",
+            result.DeviceCode,
+            result.AbnormalClassText,
+            result.IsAbnormal);
     }
 
     private static string BuildNonPlayingConclusion(int? onlineStatus)
