@@ -10,7 +10,28 @@ namespace Tysl.Inspection.Desktop.Tests;
 public sealed class OpenPlatformClientTests
 {
     [Fact]
-    public async Task GetDevicePreviewUrlAsync_DecryptsRsaPayload_WhenVersionIs11()
+    public async Task GetDevicePreviewUrlAsync_DecryptsRsaPayload_WhenDataIsHex()
+    {
+        using var rsa = RSA.Create(2048);
+        var payloadJson = """{"url":"rtsp://demo/live/dev-hex","expireTime":"600"}""";
+        var encryptedPayload = Convert.ToHexString(
+            rsa.Encrypt(Encoding.UTF8.GetBytes(payloadJson), RSAEncryptionPadding.Pkcs1));
+        using var client = CreateClient(
+            rsa.ExportRSAPrivateKeyPem(),
+            CreateHandler(
+                CreateJsonResponse("""{"code":0,"msg":"成功","data":{"accessToken":"token","refreshToken":"refresh","expiresIn":3600}}"""),
+                CreateJsonResponse($$"""{"code":0,"msg":"成功","data":"{{encryptedPayload}}"}""")));
+
+        var result = await client.GetDevicePreviewUrlAsync("dev-hex", CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Payload);
+        Assert.Equal("rtsp://demo/live/dev-hex", result.Payload!.Url);
+        Assert.Equal("600", result.Payload.ExpireTime);
+    }
+
+    [Fact]
+    public async Task GetDevicePreviewUrlAsync_DecryptsRsaPayload_WhenDataIsBase64()
     {
         using var rsa = RSA.Create(2048);
         var payloadJson = """{"url":"rtsp://demo/live/dev-001","expireTime":"600"}""";

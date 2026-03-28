@@ -490,11 +490,18 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
 
         try
         {
-            return DecryptResponseDataStrict(encryptedPayload);
+            return DecryptPreviewResponseDataStrict(encryptedPayload);
         }
         catch (PayloadProcessingException)
         {
             throw;
+        }
+        catch (CryptographicException exception)
+        {
+            throw new PayloadProcessingException(
+                "RTSP 响应解密失败",
+                "RTSP RSA 解密失败。",
+                exception);
         }
         catch (Exception exception)
         {
@@ -542,33 +549,29 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
         };
     }
 
+    private string DecryptPreviewResponseDataStrict(string encryptedPayload)
+    {
+        if (string.IsNullOrWhiteSpace(options.Version))
+        {
+            throw new InvalidOperationException("开放平台 version 未配置。");
+        }
+
+        return options.Version switch
+        {
+            "1.1" => DecryptResponseDataWithRsa(DecodePreviewCipherBytes(encryptedPayload)),
+            "v1.0" => XxTea.DecryptFromHex(encryptedPayload, options.AppSecret),
+            _ => throw new InvalidOperationException($"不支持的开放平台 version：{options.Version}")
+        };
+    }
+
     private string DecryptResponseDataWithRsa(string encryptedPayload)
     {
-        using var rsa = RSA.Create();
-        var keyText = options.RsaPrivateKey.Trim();
-        if (string.IsNullOrWhiteSpace(keyText))
-        {
-            throw new InvalidOperationException("RSA 私钥未配置。");
-        }
+        return DecryptResponseDataWithRsa(Convert.FromBase64String(encryptedPayload));
+    }
 
-        if (keyText.Contains("BEGIN", StringComparison.OrdinalIgnoreCase))
-        {
-            rsa.ImportFromPem(keyText);
-        }
-        else
-        {
-            var keyBytes = Convert.FromBase64String(keyText);
-            try
-            {
-                rsa.ImportRSAPrivateKey(keyBytes, out _);
-            }
-            catch (CryptographicException)
-            {
-                rsa.ImportPkcs8PrivateKey(keyBytes, out _);
-            }
-        }
-
-        var encryptedBytes = Convert.FromBase64String(encryptedPayload);
+    private string DecryptResponseDataWithRsa(byte[] encryptedBytes)
+    {
+        using var rsa = CreateRsa();
         foreach (var padding in new[]
         {
             RSAEncryptionPadding.Pkcs1,
@@ -588,6 +591,96 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
         }
 
         throw new CryptographicException("RSA 私钥无法解密 RTSP 响应 data。");
+    }
+
+    private byte[] DecodePreviewCipherBytes(string encryptedPayload)
+    {
+        var cipherText = encryptedPayload.Trim();
+        if (LooksLikeHex(cipherText))
+        {
+            logger.LogInformation("RTSP data 输入编码识别：识别为 Hex");
+            return Convert.FromHexString(cipherText);
+        }
+
+        if (TryDecodeBase64(cipherText, out var encryptedBytes))
+        {
+            logger.LogInformation("RTSP data 输入编码识别：识别为 Base64");
+            return encryptedBytes;
+        }
+
+        logger.LogWarning("RTSP data 输入编码识别：无法识别输入编码");
+        throw new PayloadProcessingException(
+            "RTSP 响应解密失败",
+            "RTSP data 输入编码识别：无法识别输入编码。");
+    }
+
+    private RSA CreateRsa()
+    {
+        var rsa = RSA.Create();
+        try
+        {
+            var keyText = options.RsaPrivateKey.Trim();
+            if (string.IsNullOrWhiteSpace(keyText))
+            {
+                throw new InvalidOperationException("RSA 私钥未配置。");
+            }
+
+            if (keyText.Contains("BEGIN", StringComparison.OrdinalIgnoreCase))
+            {
+                rsa.ImportFromPem(keyText);
+            }
+            else
+            {
+                var keyBytes = Convert.FromBase64String(keyText);
+                try
+                {
+                    rsa.ImportRSAPrivateKey(keyBytes, out _);
+                }
+                catch (CryptographicException)
+                {
+                    rsa.ImportPkcs8PrivateKey(keyBytes, out _);
+                }
+            }
+
+            return rsa;
+        }
+        catch
+        {
+            rsa.Dispose();
+            throw;
+        }
+    }
+
+    private static bool LooksLikeHex(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || value.Length % 2 != 0)
+        {
+            return false;
+        }
+
+        foreach (var character in value)
+        {
+            if (!Uri.IsHexDigit(character))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryDecodeBase64(string value, out byte[] bytes)
+    {
+        try
+        {
+            bytes = Convert.FromBase64String(value);
+            return true;
+        }
+        catch (FormatException)
+        {
+            bytes = [];
+            return false;
+        }
     }
 
     private static string ComputeSignature(string source, string secret)
