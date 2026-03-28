@@ -29,6 +29,7 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
     private readonly AppRuntimePaths runtimePaths;
     private readonly ILogger<OpenPlatformClient> logger;
     private readonly HttpClient httpClient;
+    private readonly bool ownsHttpClient;
     private readonly SemaphoreSlim tokenLock = new(1, 1);
     private OpenPlatformAccessTokenPayload? tokenCache;
 
@@ -36,17 +37,23 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
         IOptions<TianyiOpenPlatformOptions> options,
         AppRuntimePaths runtimePaths,
         ILogger<OpenPlatformClient> logger)
+        : this(options.Value, runtimePaths, logger)
     {
-        this.options = options.Value;
+    }
+
+    public OpenPlatformClient(
+        TianyiOpenPlatformOptions options,
+        AppRuntimePaths runtimePaths,
+        ILogger<OpenPlatformClient> logger,
+        HttpClient? httpClient = null)
+    {
+        this.options = options;
         this.runtimePaths = runtimePaths;
         this.logger = logger;
 
-        httpClient = new HttpClient
-        {
-            Timeout = TimeSpan.FromSeconds(30)
-        };
-        httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        httpClient.DefaultRequestHeaders.Add("apiVersion", this.options.ApiVersion);
+        this.httpClient = httpClient ?? new HttpClient();
+        ownsHttpClient = httpClient is null;
+        ConfigureHttpClient(this.httpClient, this.options.ApiVersion);
     }
 
     public Task<OpenPlatformCallResult<OpenPlatformAccessTokenPayload>> GetAccessTokenAsync(CancellationToken cancellationToken)
@@ -171,8 +178,28 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
 
     public void Dispose()
     {
-        httpClient.Dispose();
+        if (ownsHttpClient)
+        {
+            httpClient.Dispose();
+        }
+
         tokenLock.Dispose();
+    }
+
+    private static void ConfigureHttpClient(HttpClient httpClient, string apiVersion)
+    {
+        httpClient.Timeout = TimeSpan.FromSeconds(30);
+
+        if (!httpClient.DefaultRequestHeaders.Accept.Any(header =>
+                string.Equals(header.MediaType, "application/json", StringComparison.OrdinalIgnoreCase)))
+        {
+            httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        }
+
+        if (!httpClient.DefaultRequestHeaders.Contains("apiVersion"))
+        {
+            httpClient.DefaultRequestHeaders.Add("apiVersion", apiVersion);
+        }
     }
 
     private async Task<OpenPlatformCallResult<OpenPlatformAccessTokenPayload>> EnsureAccessTokenAsync(CancellationToken cancellationToken)
@@ -280,6 +307,8 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
             httpClient.DefaultRequestHeaders.SelectMany(header => header.Value.Select(value => new KeyValuePair<string, string?>(header.Key, value))));
         var maskedRequest = SensitiveDataMasker.MaskDictionary(privateParameters);
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        HttpStatusCode? statusCode = null;
+        var maskedResponse = string.Empty;
 
         try
         {
@@ -289,10 +318,11 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
             };
 
             using var response = await httpClient.SendAsync(request, cancellationToken);
+            statusCode = response.StatusCode;
             var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
             stopwatch.Stop();
 
-            var maskedResponse = SensitiveDataMasker.MaskJson(responseText);
+            maskedResponse = SensitiveDataMasker.MaskJson(responseText);
             LogApiAccess(
                 endpointName,
                 requestUrl,
@@ -310,35 +340,29 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
 
             if (!response.IsSuccessStatusCode)
             {
-                return new OpenPlatformCallResult<T>
-                {
-                    Success = false,
-                    EndpointName = endpointName,
-                    RequestUrl = requestUrl,
-                    HttpStatusCode = response.StatusCode,
-                    PlatformCode = platformCode,
-                    PlatformMessage = platformMessage,
-                    MaskedResponse = maskedResponse,
-                    ErrorMessage = $"HTTP {(int)response.StatusCode} {response.StatusCode}"
-                };
+                return BuildPlatformFailureResult<T>(
+                    endpointName,
+                    requestUrl,
+                    response.StatusCode,
+                    platformCode,
+                    platformMessage,
+                    maskedResponse,
+                    $"HTTP {(int)response.StatusCode} {response.StatusCode}");
             }
 
             if (!IsSuccessCode(platformCode))
             {
-                return new OpenPlatformCallResult<T>
-                {
-                    Success = false,
-                    EndpointName = endpointName,
-                    RequestUrl = requestUrl,
-                    HttpStatusCode = response.StatusCode,
-                    PlatformCode = platformCode,
-                    PlatformMessage = platformMessage,
-                    MaskedResponse = maskedResponse,
-                    ErrorMessage = platformMessage ?? $"Platform returned code {platformCode}"
-                };
+                return BuildPlatformFailureResult<T>(
+                    endpointName,
+                    requestUrl,
+                    response.StatusCode,
+                    platformCode,
+                    platformMessage,
+                    maskedResponse,
+                    platformMessage ?? $"Platform returned code {platformCode}");
             }
 
-            var payloadElement = ExtractPayloadElement(root);
+            var payloadElement = ExtractPayloadElement(root, endpointName);
             var payload = parsePayload(payloadElement);
 
             return new OpenPlatformCallResult<T>
@@ -350,8 +374,23 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
                 PlatformCode = platformCode,
                 PlatformMessage = platformMessage,
                 MaskedResponse = maskedResponse,
-                Payload = payload
-            };
+                    Payload = payload
+                };
+        }
+        catch (PayloadProcessingException exception)
+        {
+            stopwatch.Stop();
+            LogApiAccess(
+                endpointName,
+                requestUrl,
+                statusCode,
+                stopwatch.ElapsedMilliseconds,
+                maskedRequest,
+                maskedHeaders,
+                maskedResponse,
+                exception.LogSummary);
+
+            return Fail<T>(endpointName, requestUrl, exception.UserMessage);
         }
         catch (Exception exception)
         {
@@ -359,24 +398,39 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
             LogApiAccess(
                 endpointName,
                 requestUrl,
-                null,
+                statusCode,
                 stopwatch.ElapsedMilliseconds,
                 maskedRequest,
                 maskedHeaders,
-                string.Empty,
+                maskedResponse,
                 exception.Message);
 
             return Fail<T>(endpointName, requestUrl, exception.Message);
         }
     }
 
-    private JsonElement ExtractPayloadElement(JsonElement root)
+    private JsonElement ExtractPayloadElement(JsonElement root, string endpointName)
     {
         if (!root.TryGetProperty("data", out var payloadElement))
         {
+            if (IsPreviewEndpoint(endpointName))
+            {
+                throw new PayloadProcessingException("RTSP 接口业务失败", "RTSP 接口返回缺少 data 字段。");
+            }
+
             throw new InvalidOperationException("Response does not contain data.");
         }
 
+        if (IsPreviewEndpoint(endpointName))
+        {
+            return ExtractPreviewPayloadElement(payloadElement);
+        }
+
+        return ExtractGenericPayloadElement(payloadElement);
+    }
+
+    private JsonElement ExtractGenericPayloadElement(JsonElement payloadElement)
+    {
         if (payloadElement.ValueKind == JsonValueKind.String)
         {
             var dataText = payloadElement.GetString() ?? string.Empty;
@@ -389,6 +443,66 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
         }
 
         return payloadElement.Clone();
+    }
+
+    private JsonElement ExtractPreviewPayloadElement(JsonElement payloadElement)
+    {
+        if (payloadElement.ValueKind == JsonValueKind.Object)
+        {
+            return payloadElement.Clone();
+        }
+
+        if (payloadElement.ValueKind != JsonValueKind.String)
+        {
+            throw new PayloadProcessingException(
+                "RTSP 接口业务失败",
+                $"RTSP 响应 data 类型不支持：{payloadElement.ValueKind}。");
+        }
+
+        var decryptedJson = DecryptPreviewPayload(payloadElement.GetString() ?? string.Empty);
+        try
+        {
+            using var document = JsonDocument.Parse(decryptedJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                throw new PayloadProcessingException(
+                    "RTSP 解密后 JSON 解析失败",
+                    $"RTSP 解密后根节点类型不是 JSON object，而是 {document.RootElement.ValueKind}。");
+            }
+
+            return document.RootElement.Clone();
+        }
+        catch (JsonException exception)
+        {
+            throw new PayloadProcessingException(
+                "RTSP 解密后 JSON 解析失败",
+                $"RTSP 解密后 JSON 解析失败：{exception.Message}",
+                exception);
+        }
+    }
+
+    private string DecryptPreviewPayload(string encryptedPayload)
+    {
+        if (string.IsNullOrWhiteSpace(encryptedPayload))
+        {
+            throw new PayloadProcessingException("RTSP 响应解密失败", "RTSP 响应 data 为空。");
+        }
+
+        try
+        {
+            return DecryptResponseDataStrict(encryptedPayload);
+        }
+        catch (PayloadProcessingException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new PayloadProcessingException(
+                "RTSP 响应解密失败",
+                $"RTSP 响应解密失败：{exception.Message}",
+                exception);
+        }
     }
 
     private string TryDecryptResponseData(string encryptedPayload)
@@ -405,32 +519,75 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
 
         try
         {
-            using var rsa = RSA.Create();
-            var keyText = options.RsaPrivateKey.Trim();
-            if (keyText.Contains("BEGIN", StringComparison.OrdinalIgnoreCase))
-            {
-                rsa.ImportFromPem(keyText);
-            }
-            else
-            {
-                var keyBytes = Convert.FromBase64String(keyText);
-                rsa.ImportRSAPrivateKey(keyBytes, out _);
-            }
-
-            var encryptedBytes = Convert.FromBase64String(encryptedPayload);
-            try
-            {
-                return Encoding.UTF8.GetString(rsa.Decrypt(encryptedBytes, RSAEncryptionPadding.Pkcs1));
-            }
-            catch (CryptographicException)
-            {
-                return Encoding.UTF8.GetString(rsa.Decrypt(encryptedBytes, RSAEncryptionPadding.OaepSHA1));
-            }
+            return DecryptResponseDataStrict(encryptedPayload);
         }
         catch
         {
             return encryptedPayload;
         }
+    }
+
+    private string DecryptResponseDataStrict(string encryptedPayload)
+    {
+        if (string.IsNullOrWhiteSpace(options.Version))
+        {
+            throw new InvalidOperationException("开放平台 version 未配置。");
+        }
+
+        return options.Version switch
+        {
+            "1.1" => DecryptResponseDataWithRsa(encryptedPayload),
+            "v1.0" => XxTea.DecryptFromHex(encryptedPayload, options.AppSecret),
+            _ => throw new InvalidOperationException($"不支持的开放平台 version：{options.Version}")
+        };
+    }
+
+    private string DecryptResponseDataWithRsa(string encryptedPayload)
+    {
+        using var rsa = RSA.Create();
+        var keyText = options.RsaPrivateKey.Trim();
+        if (string.IsNullOrWhiteSpace(keyText))
+        {
+            throw new InvalidOperationException("RSA 私钥未配置。");
+        }
+
+        if (keyText.Contains("BEGIN", StringComparison.OrdinalIgnoreCase))
+        {
+            rsa.ImportFromPem(keyText);
+        }
+        else
+        {
+            var keyBytes = Convert.FromBase64String(keyText);
+            try
+            {
+                rsa.ImportRSAPrivateKey(keyBytes, out _);
+            }
+            catch (CryptographicException)
+            {
+                rsa.ImportPkcs8PrivateKey(keyBytes, out _);
+            }
+        }
+
+        var encryptedBytes = Convert.FromBase64String(encryptedPayload);
+        foreach (var padding in new[]
+        {
+            RSAEncryptionPadding.Pkcs1,
+            RSAEncryptionPadding.OaepSHA1,
+            RSAEncryptionPadding.OaepSHA256,
+            RSAEncryptionPadding.OaepSHA384,
+            RSAEncryptionPadding.OaepSHA512
+        })
+        {
+            try
+            {
+                return Encoding.UTF8.GetString(rsa.Decrypt(encryptedBytes, padding));
+            }
+            catch (CryptographicException)
+            {
+            }
+        }
+
+        throw new CryptographicException("RSA 私钥无法解密 RTSP 响应 data。");
     }
 
     private static string ComputeSignature(string source, string secret)
@@ -451,6 +608,35 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
             || platformCode == "0"
             || platformCode == "200"
             || platformCode.Equals("success", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsPreviewEndpoint(string endpointName)
+    {
+        return string.Equals(endpointName, "getDeviceMediaUrlRtsp", StringComparison.Ordinal);
+    }
+
+    private static OpenPlatformCallResult<T> BuildPlatformFailureResult<T>(
+        string endpointName,
+        string requestUrl,
+        HttpStatusCode? statusCode,
+        string? platformCode,
+        string? platformMessage,
+        string maskedResponse,
+        string defaultMessage)
+    {
+        return new OpenPlatformCallResult<T>
+        {
+            Success = false,
+            EndpointName = endpointName,
+            RequestUrl = requestUrl,
+            HttpStatusCode = statusCode,
+            PlatformCode = platformCode,
+            PlatformMessage = platformMessage,
+            MaskedResponse = maskedResponse,
+            ErrorMessage = IsPreviewEndpoint(endpointName)
+                ? "RTSP 接口业务失败"
+                : defaultMessage
+        };
     }
 
     private async Task<OpenPlatformAccessTokenPayload?> LoadTokenCacheAsync(CancellationToken cancellationToken)
@@ -544,10 +730,22 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
 
     private static OpenPlatformPreviewUrlPayload ParsePreviewUrl(JsonElement root)
     {
-        var source = UnwrapPayload(root, null);
-        var url = GetString(source, "url", "rtspUrl", "playUrl", "previewUrl")
-            ?? throw new InvalidOperationException("Missing required field: url");
-        var expireTime = GetString(source, "expireTime", "expire", "expireAt", "expireDateTime");
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            throw new PayloadProcessingException(
+                "RTSP 解密后 JSON 解析失败",
+                $"RTSP 解密后根节点类型不是 JSON object，而是 {root.ValueKind}。");
+        }
+
+        var url = GetString(root, "url");
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            throw new PayloadProcessingException(
+                "RTSP 返回缺少 url",
+                $"RTSP 返回缺少 url。payload={SensitiveDataMasker.MaskJson(root.GetRawText())}");
+        }
+
+        var expireTime = GetString(root, "expireTime");
         return new OpenPlatformPreviewUrlPayload(url, expireTime);
     }
 
@@ -621,5 +819,19 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
             RequestUrl = requestUrl,
             ErrorMessage = message
         };
+    }
+
+    private sealed class PayloadProcessingException : Exception
+    {
+        public PayloadProcessingException(string userMessage, string logSummary, Exception? innerException = null)
+            : base(userMessage, innerException)
+        {
+            UserMessage = userMessage;
+            LogSummary = logSummary;
+        }
+
+        public string UserMessage { get; }
+
+        public string LogSummary { get; }
     }
 }

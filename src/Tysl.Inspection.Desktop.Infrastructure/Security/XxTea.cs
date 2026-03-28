@@ -17,6 +17,19 @@ internal static class XxTea
         return Convert.ToHexString(ToByteArray(result, includeLength: false));
     }
 
+    public static string DecryptFromHex(string encryptedHex, string key)
+    {
+        var data = ToUInt32Array(Convert.FromHexString(encryptedHex), includeLength: false);
+        var keyData = ToUInt32Array(Encoding.UTF8.GetBytes(key), includeLength: false);
+        if (keyData.Length < 4)
+        {
+            Array.Resize(ref keyData, 4);
+        }
+
+        var result = Decrypt(data, keyData);
+        return Encoding.UTF8.GetString(ToByteArray(result, includeLength: true));
+    }
+
     private static uint[] Encrypt(uint[] values, uint[] key)
     {
         var length = values.Length;
@@ -45,6 +58,39 @@ internal static class XxTea
             var first = values[0];
             values[length - 1] += Mix(sum, first, last, length - 1, e, key);
             last = values[length - 1];
+        }
+
+        return values;
+    }
+
+    private static uint[] Decrypt(uint[] values, uint[] key)
+    {
+        var length = values.Length;
+        if (length < 2)
+        {
+            return values;
+        }
+
+        const uint delta = 0x9E3779B9;
+        var rounds = (uint)(6 + 52 / length);
+        var sum = rounds * delta;
+        var next = values[0];
+
+        while (sum != 0)
+        {
+            var e = (sum >> 2) & 3;
+
+            for (var index = length - 1; index > 0; index--)
+            {
+                var last = values[index - 1];
+                values[index] -= Mix(sum, next, last, index, e, key);
+                next = values[index];
+            }
+
+            var tail = values[length - 1];
+            values[0] -= Mix(sum, next, tail, 0, e, key);
+            next = values[0];
+            sum -= delta;
         }
 
         return values;

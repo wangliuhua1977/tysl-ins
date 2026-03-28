@@ -197,6 +197,11 @@ public sealed class PreviewService(
             return $"accessToken 获取失败：{message}";
         }
 
+        if (message.StartsWith("RTSP ", StringComparison.Ordinal))
+        {
+            return message;
+        }
+
         return $"获取预览地址失败：{message}";
     }
 

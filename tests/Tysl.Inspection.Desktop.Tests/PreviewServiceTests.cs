@@ -101,6 +101,34 @@ public sealed class PreviewServiceTests
         Assert.True(client.PreviewUrlRequested);
     }
 
+    [Fact]
+    public async Task PrepareAsync_PassesThroughRtspStageMessage_WhenPreviewUrlQueryFails()
+    {
+        var client = new StubOpenPlatformClient
+        {
+            DeviceStatusResult = new OpenPlatformCallResult<OpenPlatformDeviceStatusPayload>
+            {
+                Success = true,
+                EndpointName = "getDeviceStatus",
+                Payload = new OpenPlatformDeviceStatusPayload("dev-001", 1)
+            },
+            PreviewUrlResult = new OpenPlatformCallResult<OpenPlatformPreviewUrlPayload>
+            {
+                Success = false,
+                EndpointName = "getDeviceMediaUrlRtsp",
+                ErrorMessage = "RTSP 响应解密失败"
+            }
+        };
+        var service = new PreviewService(new InMemoryMapStore(), client, NullLogger<PreviewService>.Instance);
+
+        var result = await service.PrepareAsync("dev-001", CancellationToken.None);
+
+        Assert.False(result.Success);
+        Assert.Equal("在线：可请求预览地址", result.DiagnosisText);
+        Assert.Equal("RTSP 响应解密失败", result.AddressStatusText);
+        Assert.True(client.PreviewUrlRequested);
+    }
+
     private sealed class StubOpenPlatformClient : IOpenPlatformClient
     {
         public bool PreviewUrlRequested { get; private set; }
