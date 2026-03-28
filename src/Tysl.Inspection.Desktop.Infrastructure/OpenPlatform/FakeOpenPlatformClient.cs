@@ -95,8 +95,8 @@ public sealed class FakeOpenPlatformClient : IOpenPlatformClient
             return Task.FromResult(new OpenPlatformCallResult<OpenPlatformPreviewUrlPayload>
             {
                 Success = false,
-                EndpointName = "getDeviceVideoUrl",
-                RequestUrl = "fake://getDeviceVideoUrl",
+                EndpointName = "getDeviceMediaUrlRtsp",
+                RequestUrl = "fake://getDeviceMediaUrlRtsp",
                 ErrorMessage = "设备离线"
             });
         }
@@ -104,8 +104,8 @@ public sealed class FakeOpenPlatformClient : IOpenPlatformClient
         return Task.FromResult(new OpenPlatformCallResult<OpenPlatformPreviewUrlPayload>
         {
             Success = true,
-            EndpointName = "getDeviceVideoUrl",
-            RequestUrl = "fake://getDeviceVideoUrl",
+            EndpointName = "getDeviceMediaUrlRtsp",
+            RequestUrl = "fake://getDeviceMediaUrlRtsp",
             Payload = new OpenPlatformPreviewUrlPayload(
                 $"rtsp://fake-platform.example/live/{deviceCode}",
                 "600 秒")

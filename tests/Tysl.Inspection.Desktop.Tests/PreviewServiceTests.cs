@@ -86,7 +86,7 @@ public sealed class PreviewServiceTests
             PreviewUrlResult = new OpenPlatformCallResult<OpenPlatformPreviewUrlPayload>
             {
                 Success = true,
-                EndpointName = "getDeviceVideoUrl",
+                EndpointName = "getDeviceMediaUrlRtsp",
                 Payload = new OpenPlatformPreviewUrlPayload("rtsp://demo/live/dev-001", "600 秒")
             }
         };
@@ -147,7 +147,7 @@ public sealed class PreviewServiceTests
             new()
             {
                 Success = true,
-                EndpointName = "getDeviceVideoUrl",
+                EndpointName = "getDeviceMediaUrlRtsp",
                 Payload = new OpenPlatformPreviewUrlPayload("rtsp://demo/live/dev-001", "600 秒")
             };
 

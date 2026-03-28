@@ -129,7 +129,7 @@ public sealed class GroupSyncServiceTests
             return Task.FromResult(new OpenPlatformCallResult<OpenPlatformPreviewUrlPayload>
             {
                 Success = true,
-                EndpointName = "getDeviceVideoUrl",
+                EndpointName = "getDeviceMediaUrlRtsp",
                 Payload = new OpenPlatformPreviewUrlPayload($"rtsp://demo/live/{deviceCode}", "600 秒")
             });
         }

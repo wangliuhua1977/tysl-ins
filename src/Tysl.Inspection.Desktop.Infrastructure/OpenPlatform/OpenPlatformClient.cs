@@ -16,8 +16,8 @@ namespace Tysl.Inspection.Desktop.Infrastructure.OpenPlatform;
 
 public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
 {
-    private const string DeviceStatusPath = "/open/token/vcpDevice/getDeviceStatus";
-    private const string DevicePreviewPath = "/open/token/vcpDevice/getDeviceVideoUrl";
+    private const string DeviceStatusPath = "/open/token/vpaas/device/getDeviceStatus";
+    private const string DevicePreviewPath = "/open/token/cloud/getDeviceMediaUrlRtsp";
 
     private static readonly JsonSerializerOptions JsonSerializerOptions = new(JsonSerializerDefaults.Web)
     {
@@ -149,7 +149,7 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
         if (!accessTokenResult.Success || accessTokenResult.Payload is null)
         {
             return Fail<OpenPlatformPreviewUrlPayload>(
-                "getDeviceVideoUrl",
+                "getDeviceMediaUrlRtsp",
                 BuildUrl(DevicePreviewPath),
                 $"accessToken 获取失败：{accessTokenResult.BuildMessage()}");
         }
@@ -162,7 +162,7 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
         };
 
         return await SendAsync(
-            endpointName: "getDeviceVideoUrl",
+            endpointName: "getDeviceMediaUrlRtsp",
             path: DevicePreviewPath,
             privateParameters: requestParameters,
             parsePayload: ParsePreviewUrl,
