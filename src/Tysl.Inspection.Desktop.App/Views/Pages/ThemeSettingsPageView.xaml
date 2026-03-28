@@ -1,0 +1,20 @@
+<UserControl x:Class="Tysl.Inspection.Desktop.App.Views.Pages.ThemeSettingsPageView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid>
+        <Border Margin="24"
+                Padding="20"
+                Background="{DynamicResource CardBrush}"
+                BorderBrush="{DynamicResource CardBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="18">
+            <StackPanel>
+                <TextBlock FontSize="24" FontWeight="SemiBold" Text="主题设置" />
+                <TextBlock Margin="0,12,0,0"
+                           Foreground="{DynamicResource SecondaryTextBrush}"
+                           TextWrapping="Wrap"
+                           Text="{Binding Description}" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>

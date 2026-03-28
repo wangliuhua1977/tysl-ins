@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Tysl.Inspection.Desktop.App/Tysl.Inspection.Desktop.App.csproj" />
+    <Project Path="src/Tysl.Inspection.Desktop.Application/Tysl.Inspection.Desktop.Application.csproj" />
+    <Project Path="src/Tysl.Inspection.Desktop.Contracts/Tysl.Inspection.Desktop.Contracts.csproj" />
+    <Project Path="src/Tysl.Inspection.Desktop.Domain/Tysl.Inspection.Desktop.Domain.csproj" />
+    <Project Path="src/Tysl.Inspection.Desktop.Infrastructure/Tysl.Inspection.Desktop.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Tysl.Inspection.Desktop.Tests/Tysl.Inspection.Desktop.Tests.csproj" />
+  </Folder>
+</Solution>
