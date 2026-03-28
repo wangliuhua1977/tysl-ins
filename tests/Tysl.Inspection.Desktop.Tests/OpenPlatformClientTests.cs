@@ -52,13 +52,33 @@ public sealed class OpenPlatformClientTests
     }
 
     [Fact]
-    public async Task GetDevicePreviewUrlAsync_ReturnsDecryptFailure_WhenPayloadCannotBeDecrypted()
+    public async Task GetDevicePreviewUrlAsync_DecryptsRsaPayload_WhenCipherTextIsChunked()
+    {
+        using var rsa = RSA.Create(2048);
+        var payloadJson = $$"""{"url":"rtsp://demo/live/{{new string('a', 320)}}","expireTime":"1800"}""";
+        var encryptedPayload = EncryptInBlocksToBase64(rsa, payloadJson);
+        using var client = CreateClient(
+            rsa.ExportRSAPrivateKeyPem(),
+            CreateHandler(
+                CreateJsonResponse("""{"code":0,"msg":"成功","data":{"accessToken":"token","refreshToken":"refresh","expiresIn":3600}}"""),
+                CreateJsonResponse($$"""{"code":0,"msg":"成功","data":"{{encryptedPayload}}"}""")));
+
+        var result = await client.GetDevicePreviewUrlAsync("dev-chunked", CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Payload);
+        Assert.Equal($"rtsp://demo/live/{new string('a', 320)}", result.Payload!.Url);
+        Assert.Equal("1800", result.Payload.ExpireTime);
+    }
+
+    [Fact]
+    public async Task GetDevicePreviewUrlAsync_ReturnsDecryptFailure_WhenPayloadIsNotHexOrBase64()
     {
         using var client = CreateClient(
             CreatePrivateKeyPem(),
             CreateHandler(
                 CreateJsonResponse("""{"code":0,"msg":"成功","data":{"accessToken":"token","refreshToken":"refresh","expiresIn":3600}}"""),
-                CreateJsonResponse("""{"code":0,"msg":"成功","data":"not-base64"}""")));
+                CreateJsonResponse("""{"code":0,"msg":"成功","data":"not-base64!"}""")));
 
         var result = await client.GetDevicePreviewUrlAsync("dev-001", CancellationToken.None);
 
@@ -116,27 +136,6 @@ public sealed class OpenPlatformClientTests
 
         Assert.False(result.Success);
         Assert.Equal("RTSP 接口业务失败", result.ErrorMessage);
-    }
-
-    [Fact]
-    public async Task GetDevicePreviewUrlAsync_DecryptsRsaPayload_WhenPlatformUsesOaepSha256()
-    {
-        using var rsa = RSA.Create(2048);
-        var payloadJson = """{"url":"rtsp://demo/live/dev-002","expireTime":"900"}""";
-        var encryptedPayload = Convert.ToBase64String(
-            rsa.Encrypt(Encoding.UTF8.GetBytes(payloadJson), RSAEncryptionPadding.OaepSHA256));
-        using var client = CreateClient(
-            rsa.ExportRSAPrivateKeyPem(),
-            CreateHandler(
-                CreateJsonResponse("""{"code":0,"msg":"成功","data":{"accessToken":"token","refreshToken":"refresh","expiresIn":3600}}"""),
-                CreateJsonResponse($$"""{"code":0,"msg":"成功","data":"{{encryptedPayload}}"}""")));
-
-        var result = await client.GetDevicePreviewUrlAsync("dev-002", CancellationToken.None);
-
-        Assert.True(result.Success);
-        Assert.NotNull(result.Payload);
-        Assert.Equal("rtsp://demo/live/dev-002", result.Payload!.Url);
-        Assert.Equal("900", result.Payload.ExpireTime);
     }
 
     [Fact]
@@ -209,6 +208,23 @@ public sealed class OpenPlatformClientTests
     {
         using var rsa = RSA.Create(2048);
         return rsa.ExportRSAPrivateKeyPem();
+    }
+
+    private static string EncryptInBlocksToBase64(RSA rsa, string payloadJson)
+    {
+        var plainBytes = Encoding.UTF8.GetBytes(payloadJson);
+        var maxPlainBlockSize = (rsa.KeySize / 8) - 11;
+        using var cipherStream = new MemoryStream();
+        for (var offset = 0; offset < plainBytes.Length; offset += maxPlainBlockSize)
+        {
+            var blockSize = Math.Min(maxPlainBlockSize, plainBytes.Length - offset);
+            var cipherBlock = rsa.Encrypt(
+                plainBytes.AsSpan(offset, blockSize).ToArray(),
+                RSAEncryptionPadding.Pkcs1);
+            cipherStream.Write(cipherBlock, 0, cipherBlock.Length);
+        }
+
+        return Convert.ToBase64String(cipherStream.ToArray());
     }
 
     private sealed class StubHttpMessageHandler(params HttpResponseMessage[] responses) : HttpMessageHandler

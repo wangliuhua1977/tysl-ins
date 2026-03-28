@@ -322,7 +322,7 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
             var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
             stopwatch.Stop();
 
-            maskedResponse = SensitiveDataMasker.MaskJson(responseText);
+            maskedResponse = MaskResponseForLogging(endpointName, responseText);
             LogApiAccess(
                 endpointName,
                 requestUrl,
@@ -374,8 +374,8 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
                 PlatformCode = platformCode,
                 PlatformMessage = platformMessage,
                 MaskedResponse = maskedResponse,
-                    Payload = payload
-                };
+                Payload = payload
+            };
         }
         catch (PayloadProcessingException exception)
         {
@@ -447,11 +447,6 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
 
     private JsonElement ExtractPreviewPayloadElement(JsonElement payloadElement)
     {
-        if (payloadElement.ValueKind == JsonValueKind.Object)
-        {
-            return payloadElement.Clone();
-        }
-
         if (payloadElement.ValueKind != JsonValueKind.String)
         {
             throw new PayloadProcessingException(
@@ -492,16 +487,16 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
         {
             return DecryptPreviewResponseDataStrict(encryptedPayload);
         }
-        catch (PayloadProcessingException)
-        {
-            throw;
-        }
-        catch (CryptographicException exception)
+        catch (RsaDecryptException exception)
         {
             throw new PayloadProcessingException(
                 "RTSP 响应解密失败",
-                "RTSP RSA 解密失败。",
+                exception.StageSummary,
                 exception);
+        }
+        catch (PayloadProcessingException)
+        {
+            throw;
         }
         catch (Exception exception)
         {
@@ -543,7 +538,7 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
 
         return options.Version switch
         {
-            "1.1" => DecryptResponseDataWithRsa(encryptedPayload),
+            "1.1" => RsaDecryptor.Decrypt(encryptedPayload, options.RsaPrivateKey).PlainText,
             "v1.0" => XxTea.DecryptFromHex(encryptedPayload, options.AppSecret),
             _ => throw new InvalidOperationException($"不支持的开放平台 version：{options.Version}")
         };
@@ -558,129 +553,28 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
 
         return options.Version switch
         {
-            "1.1" => DecryptResponseDataWithRsa(DecodePreviewCipherBytes(encryptedPayload)),
+            "1.1" => DecryptPreviewResponseDataWithRsa(encryptedPayload),
             "v1.0" => XxTea.DecryptFromHex(encryptedPayload, options.AppSecret),
             _ => throw new InvalidOperationException($"不支持的开放平台 version：{options.Version}")
         };
     }
 
-    private string DecryptResponseDataWithRsa(string encryptedPayload)
+    private string DecryptPreviewResponseDataWithRsa(string encryptedPayload)
     {
-        return DecryptResponseDataWithRsa(Convert.FromBase64String(encryptedPayload));
-    }
-
-    private string DecryptResponseDataWithRsa(byte[] encryptedBytes)
-    {
-        using var rsa = CreateRsa();
-        foreach (var padding in new[]
+        if (!RsaDecryptor.TryGetCipherEncoding(encryptedPayload, out var cipherEncoding))
         {
-            RSAEncryptionPadding.Pkcs1,
-            RSAEncryptionPadding.OaepSHA1,
-            RSAEncryptionPadding.OaepSHA256,
-            RSAEncryptionPadding.OaepSHA384,
-            RSAEncryptionPadding.OaepSHA512
-        })
-        {
-            try
-            {
-                return Encoding.UTF8.GetString(rsa.Decrypt(encryptedBytes, padding));
-            }
-            catch (CryptographicException)
-            {
-            }
+            logger.LogWarning("RTSP data 输入编码识别：无法识别输入编码");
+            throw new PayloadProcessingException(
+                "RTSP 响应解密失败",
+                "RTSP data 输入编码识别：无法识别输入编码。");
         }
 
-        throw new CryptographicException("RSA 私钥无法解密 RTSP 响应 data。");
-    }
+        logger.LogInformation("RTSP data 输入编码识别：识别为 {CipherEncoding}", FormatCipherEncoding(cipherEncoding));
 
-    private byte[] DecodePreviewCipherBytes(string encryptedPayload)
-    {
-        var cipherText = encryptedPayload.Trim();
-        if (LooksLikeHex(cipherText))
-        {
-            logger.LogInformation("RTSP data 输入编码识别：识别为 Hex");
-            return Convert.FromHexString(cipherText);
-        }
-
-        if (TryDecodeBase64(cipherText, out var encryptedBytes))
-        {
-            logger.LogInformation("RTSP data 输入编码识别：识别为 Base64");
-            return encryptedBytes;
-        }
-
-        logger.LogWarning("RTSP data 输入编码识别：无法识别输入编码");
-        throw new PayloadProcessingException(
-            "RTSP 响应解密失败",
-            "RTSP data 输入编码识别：无法识别输入编码。");
-    }
-
-    private RSA CreateRsa()
-    {
-        var rsa = RSA.Create();
-        try
-        {
-            var keyText = options.RsaPrivateKey.Trim();
-            if (string.IsNullOrWhiteSpace(keyText))
-            {
-                throw new InvalidOperationException("RSA 私钥未配置。");
-            }
-
-            if (keyText.Contains("BEGIN", StringComparison.OrdinalIgnoreCase))
-            {
-                rsa.ImportFromPem(keyText);
-            }
-            else
-            {
-                var keyBytes = Convert.FromBase64String(keyText);
-                try
-                {
-                    rsa.ImportRSAPrivateKey(keyBytes, out _);
-                }
-                catch (CryptographicException)
-                {
-                    rsa.ImportPkcs8PrivateKey(keyBytes, out _);
-                }
-            }
-
-            return rsa;
-        }
-        catch
-        {
-            rsa.Dispose();
-            throw;
-        }
-    }
-
-    private static bool LooksLikeHex(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value) || value.Length % 2 != 0)
-        {
-            return false;
-        }
-
-        foreach (var character in value)
-        {
-            if (!Uri.IsHexDigit(character))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static bool TryDecodeBase64(string value, out byte[] bytes)
-    {
-        try
-        {
-            bytes = Convert.FromBase64String(value);
-            return true;
-        }
-        catch (FormatException)
-        {
-            bytes = [];
-            return false;
-        }
+        var decryptResult = RsaDecryptor.Decrypt(encryptedPayload, options.RsaPrivateKey);
+        logger.LogInformation("RTSP RSA 私钥导入：已按 {PrivateKeyFormat} 导入", FormatPrivateKeyFormat(decryptResult.PrivateKeyFormat));
+        logger.LogInformation("RTSP RSA 解密：已按 {DecryptMode} 完成", FormatDecryptMode(decryptResult.DecryptMode));
+        return decryptResult.PlainText;
     }
 
     private static string ComputeSignature(string source, string secret)
@@ -706,6 +600,43 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
     private static bool IsPreviewEndpoint(string endpointName)
     {
         return string.Equals(endpointName, "getDeviceMediaUrlRtsp", StringComparison.Ordinal);
+    }
+
+    private static string MaskResponseForLogging(string endpointName, string responseText)
+    {
+        return IsPreviewEndpoint(endpointName)
+            ? SensitiveDataMasker.MaskJson(responseText, "data")
+            : SensitiveDataMasker.MaskJson(responseText);
+    }
+
+    private static string FormatCipherEncoding(RsaCipherEncoding cipherEncoding)
+    {
+        return cipherEncoding switch
+        {
+            RsaCipherEncoding.Hex => "Hex",
+            RsaCipherEncoding.Base64 => "Base64",
+            _ => "Unknown"
+        };
+    }
+
+    private static string FormatPrivateKeyFormat(RsaPrivateKeyFormat privateKeyFormat)
+    {
+        return privateKeyFormat switch
+        {
+            RsaPrivateKeyFormat.Pkcs8 => "PKCS#8",
+            RsaPrivateKeyFormat.Pkcs1 => "PKCS#1/RSA",
+            _ => "Unknown"
+        };
+    }
+
+    private static string FormatDecryptMode(RsaDecryptMode decryptMode)
+    {
+        return decryptMode switch
+        {
+            RsaDecryptMode.SingleBlock => "单段",
+            RsaDecryptMode.Chunked => "分段",
+            _ => "未知方式"
+        };
     }
 
     private static OpenPlatformCallResult<T> BuildPlatformFailureResult<T>(

@@ -45,17 +45,21 @@ internal static class SensitiveDataMasker
         return $"{value[..4]}****{value[^4..]}";
     }
 
-    public static string MaskJson(string? json)
+    public static string MaskJson(string? json, params string[] additionalSensitiveKeys)
     {
         if (string.IsNullOrWhiteSpace(json))
         {
             return string.Empty;
         }
 
+        var sensitiveKeys = additionalSensitiveKeys.Length == 0
+            ? SensitiveKeys
+            : BuildSensitiveKeys(additionalSensitiveKeys);
+
         try
         {
             using var document = JsonDocument.Parse(json);
-            return MaskElement(document.RootElement);
+            return MaskElement(document.RootElement, sensitiveKeys);
         }
         catch
         {
@@ -63,7 +67,21 @@ internal static class SensitiveDataMasker
         }
     }
 
-    private static string MaskElement(JsonElement element)
+    private static HashSet<string> BuildSensitiveKeys(IEnumerable<string> additionalSensitiveKeys)
+    {
+        var merged = new HashSet<string>(SensitiveKeys, StringComparer.OrdinalIgnoreCase);
+        foreach (var key in additionalSensitiveKeys)
+        {
+            if (!string.IsNullOrWhiteSpace(key))
+            {
+                merged.Add(key);
+            }
+        }
+
+        return merged;
+    }
+
+    private static string MaskElement(JsonElement element, ISet<string> sensitiveKeys)
     {
         return element.ValueKind switch
         {
@@ -71,12 +89,12 @@ internal static class SensitiveDataMasker
                 ",",
                 element.EnumerateObject().Select(property =>
                 {
-                    var value = SensitiveKeys.Contains(property.Name)
+                    var value = sensitiveKeys.Contains(property.Name)
                         ? JsonSerializer.Serialize(Mask(property.Value.ToString()))
-                        : MaskElement(property.Value);
+                        : MaskElement(property.Value, sensitiveKeys);
                     return $"{JsonSerializer.Serialize(property.Name)}:{value}";
                 })) + "}",
-            JsonValueKind.Array => "[" + string.Join(",", element.EnumerateArray().Select(MaskElement)) + "]",
+            JsonValueKind.Array => "[" + string.Join(",", element.EnumerateArray().Select(item => MaskElement(item, sensitiveKeys))) + "]",
             JsonValueKind.String => JsonSerializer.Serialize(element.GetString()),
             _ => element.GetRawText()
         };
