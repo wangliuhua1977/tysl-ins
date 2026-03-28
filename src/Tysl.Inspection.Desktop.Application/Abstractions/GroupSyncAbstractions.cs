@@ -127,7 +127,7 @@ public sealed record InspectResult(
         InspectAbnormalClass.Offline => "离线",
         InspectAbnormalClass.RtspNotReady => "RTSP 未就绪",
         InspectAbnormalClass.PlayFailed => "播放失败",
-        _ when IsAbnormal => "文档未说明，需人工确认",
+        _ when IsAbnormal => string.Empty,
         _ => "无异常/巡检通过"
     };
 }

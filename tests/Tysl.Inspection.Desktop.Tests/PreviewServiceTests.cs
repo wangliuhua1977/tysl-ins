@@ -197,6 +197,30 @@ public sealed class PreviewServiceTests
     }
 
     [Fact]
+    public async Task InspectAsync_DoesNotEmitExtraAbnormalText_WhenStatusIsNotResolved()
+    {
+        var client = new StubOpenPlatformClient
+        {
+            DeviceStatusResult = new OpenPlatformCallResult<OpenPlatformDeviceStatusPayload>
+            {
+                Success = false,
+                EndpointName = "getDeviceStatus",
+                ErrorMessage = "接口超时"
+            }
+        };
+        var probe = new StubPlayProbe();
+        var service = new PreviewService(new InMemoryMapStore(), client, probe, NullLogger<PreviewService>.Instance);
+
+        var result = await service.InspectAsync("dev-001", CancellationToken.None);
+
+        Assert.True(result.IsAbnormal);
+        Assert.Equal(InspectAbnormalClass.None, result.AbnormalClass);
+        Assert.Equal(string.Empty, result.AbnormalClassText);
+        Assert.Equal("巡检失败：设备状态未获取", result.Conclusion);
+        Assert.False(probe.ProbeRequested);
+    }
+
+    [Fact]
     public async Task InspectAsync_ReturnsPlayFailedClass_WhenProbeFailsBeforePlaying()
     {
         var client = new StubOpenPlatformClient

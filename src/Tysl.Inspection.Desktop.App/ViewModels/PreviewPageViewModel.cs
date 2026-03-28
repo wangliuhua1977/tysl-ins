@@ -53,7 +53,7 @@ public sealed partial class PreviewPageViewModel(
     private string inspectFailureCategory = "暂无";
 
     [ObservableProperty]
-    private string inspectAbnormalClassText = "暂无";
+    private string inspectAbnormalClassText = string.Empty;
 
     [ObservableProperty]
     private string inspectStageText = "在线状态：暂无 | RTSP：未校验 | 播放建链：未启动 | Playing：未进入";
@@ -309,7 +309,7 @@ public sealed partial class PreviewPageViewModel(
     private void ResetInspectResult()
     {
         InspectConclusion = "尚未发起巡检诊断";
-        InspectAbnormalClassText = "暂无";
+        InspectAbnormalClassText = string.Empty;
         InspectFailureCategory = "暂无";
         InspectStageText = "在线状态：暂无 | RTSP：未校验 | 播放建链：未启动 | Playing：未进入";
         InspectDetailText = "仅在发起巡检诊断后展示最小结果。";

@@ -96,6 +96,38 @@ public sealed class PreviewPageViewModelTests
         Assert.Equal("2026-03-28 10:05:00", viewModel.InspectAtText);
     }
 
+    [Fact]
+    public async Task RequestInspectAsync_DoesNotShowExtraAbnormalText_WhenResultIsOutsideThreeClasses()
+    {
+        var previewService = new StubPreviewService
+        {
+            InspectResult = new InspectResult(
+                DateTimeOffset.Parse("2026-03-28T10:06:00+08:00"),
+                "测试设备",
+                "dev-001",
+                false,
+                "未获取",
+                false,
+                false,
+                false,
+                "巡检失败：设备状态未获取",
+                "状态查询失败",
+                "设备状态查询失败：接口超时",
+                InspectAbnormalClass.None)
+        };
+        var viewModel = new PreviewPageViewModel(
+            previewService,
+            new StubPlayWinSvc(),
+            NullLogger<PreviewPageViewModel>.Instance);
+
+        await viewModel.InitializeAsync();
+        await viewModel.RequestInspectCommand.ExecuteAsync(null);
+
+        Assert.Equal(string.Empty, viewModel.InspectAbnormalClassText);
+        Assert.Equal("巡检失败：设备状态未获取", viewModel.InspectConclusion);
+        Assert.Equal("状态查询失败", viewModel.InspectFailureCategory);
+    }
+
     [Theory]
     [InlineData(PlayStage.Initializing, "正在初始化播放器")]
     [InlineData(PlayStage.Connecting, "正在建立播放链路")]
