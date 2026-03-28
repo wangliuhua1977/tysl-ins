@@ -52,3 +52,24 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+
+# local secrets
+appsettings.Local.json
+appsettings.*.local.json
+appsettings.Development.json
+appsettings.Production.json
+secrets/
+.env
+.env.*
+
+# runtime outputs
+logs/
+*.log
+*.db
+*.db-shm
+*.db-wal
+
+# webview2/cache/temp
+webview2-cache/
+wwwroot-temp/
