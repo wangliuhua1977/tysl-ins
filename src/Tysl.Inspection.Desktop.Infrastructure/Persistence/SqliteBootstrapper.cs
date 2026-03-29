@@ -23,7 +23,13 @@ public sealed class SqliteBootstrapper(
                 groupId TEXT PRIMARY KEY,
                 groupName TEXT NOT NULL,
                 deviceCount INTEGER NOT NULL DEFAULT 0,
-                syncedAt TEXT NOT NULL
+                syncedAt TEXT NOT NULL,
+                parentGroupId TEXT NULL,
+                regionCode TEXT NOT NULL DEFAULT '',
+                level INTEGER NOT NULL DEFAULT 1,
+                hasChildren INTEGER NOT NULL DEFAULT 0,
+                hasDevice INTEGER NOT NULL DEFAULT 0,
+                regionGbId TEXT NULL
             );
 
             CREATE TABLE IF NOT EXISTS Device (
@@ -39,6 +45,19 @@ public sealed class SqliteBootstrapper(
                 sourceTypeFlag INTEGER NULL,
                 syncedAt TEXT NOT NULL,
                 FOREIGN KEY (groupId) REFERENCES "Group"(groupId) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS SyncMetadata (
+                id INTEGER NOT NULL PRIMARY KEY CHECK(id = 1),
+                platformGroupCount INTEGER NOT NULL DEFAULT 0,
+                platformDeviceCount INTEGER NOT NULL DEFAULT 0,
+                reconciliationCompleted INTEGER NOT NULL DEFAULT 0,
+                reconciliationMatched INTEGER NOT NULL DEFAULT 0,
+                reconciledRegionCount INTEGER NOT NULL DEFAULT 0,
+                reconciledDeviceCount INTEGER NOT NULL DEFAULT 0,
+                reconciledOnlineCount INTEGER NOT NULL DEFAULT 0,
+                reconciliationScopeText TEXT NOT NULL DEFAULT '',
+                syncedAt TEXT NULL
             );
 
             CREATE TABLE IF NOT EXISTS InspectAbnormalPool (
@@ -69,7 +88,11 @@ public sealed class SqliteBootstrapper(
         await using var command = connection.CreateCommand();
         command.CommandText = commandText;
         await command.ExecuteNonQueryAsync(cancellationToken);
+
+        await EnsureGroupColumnsAsync(connection, cancellationToken);
+        await EnsureSyncMetadataAsync(connection, cancellationToken);
         await EnsureInspectAbnormalPoolColumnsAsync(connection, cancellationToken);
+        await EnsureIndexesAsync(connection, cancellationToken);
 
         logger.LogInformation("SQLite schema initialized at {DatabasePath}.", ResolveDatabasePath(databaseOptions.Value, runtimePaths));
     }
@@ -91,9 +114,144 @@ public sealed class SqliteBootstrapper(
             : Path.Combine(runtimePaths.RootPath, options.Path);
     }
 
+    private static async Task EnsureGroupColumnsAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        var columns = await LoadColumnsAsync(connection, "Group", cancellationToken);
+
+        if (!columns.Contains("parentGroupId"))
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                """ALTER TABLE "Group" ADD COLUMN parentGroupId TEXT NULL;""",
+                cancellationToken);
+        }
+
+        if (!columns.Contains("regionCode"))
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                """ALTER TABLE "Group" ADD COLUMN regionCode TEXT NOT NULL DEFAULT '';""",
+                cancellationToken);
+        }
+
+        if (!columns.Contains("level"))
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                """ALTER TABLE "Group" ADD COLUMN level INTEGER NOT NULL DEFAULT 1;""",
+                cancellationToken);
+        }
+
+        if (!columns.Contains("hasChildren"))
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                """ALTER TABLE "Group" ADD COLUMN hasChildren INTEGER NOT NULL DEFAULT 0;""",
+                cancellationToken);
+        }
+
+        if (!columns.Contains("hasDevice"))
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                """ALTER TABLE "Group" ADD COLUMN hasDevice INTEGER NOT NULL DEFAULT 0;""",
+                cancellationToken);
+        }
+
+        if (!columns.Contains("regionGbId"))
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                """ALTER TABLE "Group" ADD COLUMN regionGbId TEXT NULL;""",
+                cancellationToken);
+        }
+
+        await ExecuteNonQueryAsync(
+            connection,
+            """
+            UPDATE "Group"
+            SET regionCode = CASE
+                WHEN regionCode IS NULL OR TRIM(regionCode) = '' THEN groupId
+                ELSE regionCode
+            END;
+            """,
+            cancellationToken);
+        await ExecuteNonQueryAsync(
+            connection,
+            """
+            UPDATE "Group"
+            SET level = CASE
+                WHEN level IS NULL OR level <= 0 THEN 1
+                ELSE level
+            END;
+            """,
+            cancellationToken);
+        await ExecuteNonQueryAsync(
+            connection,
+            """
+            UPDATE "Group"
+            SET hasChildren = CASE
+                WHEN hasChildren = 1 THEN 1
+                ELSE 0
+            END;
+            """,
+            cancellationToken);
+        await ExecuteNonQueryAsync(
+            connection,
+            """
+            UPDATE "Group"
+            SET hasDevice = CASE
+                WHEN hasDevice = 1 THEN 1
+                WHEN deviceCount > 0 THEN 1
+                ELSE 0
+            END;
+            """,
+            cancellationToken);
+    }
+
+    private static async Task EnsureSyncMetadataAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        await ExecuteNonQueryAsync(
+            connection,
+            """
+            INSERT OR IGNORE INTO SyncMetadata(
+                id,
+                platformGroupCount,
+                platformDeviceCount,
+                reconciliationCompleted,
+                reconciliationMatched,
+                reconciledRegionCount,
+                reconciledDeviceCount,
+                reconciledOnlineCount,
+                reconciliationScopeText,
+                syncedAt)
+            VALUES(1, 0, 0, 0, 0, 0, 0, 0, '', NULL);
+            """,
+            cancellationToken);
+        await ExecuteNonQueryAsync(
+            connection,
+            """
+            UPDATE SyncMetadata
+            SET reconciliationScopeText = CASE
+                WHEN reconciliationScopeText IS NULL THEN ''
+                ELSE reconciliationScopeText
+            END
+            WHERE id = 1;
+            """,
+            cancellationToken);
+    }
+
+    private static async Task EnsureIndexesAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        await ExecuteNonQueryAsync(
+            connection,
+            """CREATE INDEX IF NOT EXISTS IX_Group_ParentGroupId ON "Group"(parentGroupId);""",
+            cancellationToken);
+    }
+
     private static async Task EnsureInspectAbnormalPoolColumnsAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
-        var columns = await LoadInspectAbnormalPoolColumnsAsync(connection, cancellationToken);
+        var columns = await LoadColumnsAsync(connection, "InspectAbnormalPool", cancellationToken);
 
         if (!columns.Contains("handleStatus"))
         {
@@ -197,10 +355,13 @@ public sealed class SqliteBootstrapper(
             cancellationToken);
     }
 
-    private static async Task<HashSet<string>> LoadInspectAbnormalPoolColumnsAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    private static async Task<HashSet<string>> LoadColumnsAsync(
+        SqliteConnection connection,
+        string tableName,
+        CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = "PRAGMA table_info(InspectAbnormalPool);";
+        command.CommandText = $"""PRAGMA table_info("{tableName}");""";
 
         var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);

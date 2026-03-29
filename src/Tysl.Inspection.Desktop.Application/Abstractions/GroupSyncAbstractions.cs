@@ -14,6 +14,7 @@ public interface IGroupSyncStore
     Task ReplaceSnapshotAsync(
         IReadOnlyCollection<InspectionGroup> groups,
         IReadOnlyCollection<InspectionDevice> devices,
+        GroupSyncSnapshotMetadata metadata,
         CancellationToken cancellationToken);
 
     Task DeleteOrphanDevicesAsync(CancellationToken cancellationToken);
@@ -125,7 +126,11 @@ public sealed record PreviewDirectoryDeviceItem(
 public sealed record PreviewDirectoryGroupItem(
     string GroupId,
     string GroupName,
+    string? ParentGroupId,
+    string ParentGroupName,
+    int Level,
     int ReportedDeviceCount,
+    bool HasChildren,
     IReadOnlyList<PreviewDirectoryDeviceItem> Devices)
 {
     public int LoadedDeviceCount => Devices.Count;
@@ -136,12 +141,20 @@ public sealed record PreviewDirectoryGroupItem(
         ? $"{GroupName} ({LoadedDeviceCount})"
         : $"{GroupName} (本地 {LoadedDeviceCount} / 平台 {ReportedDeviceCount})";
 
+    public string HierarchyText => string.IsNullOrWhiteSpace(ParentGroupName)
+        ? $"层级 {Math.Max(Level, 1)} / 根目录"
+        : $"层级 {Math.Max(Level, 1)} / 上级：{ParentGroupName}";
+
     public string DeviceCountSummaryText => CountMatches
-        ? $"当前分组共 {LoadedDeviceCount} 台设备。"
-        : $"当前分组本地已落地 {LoadedDeviceCount} 台设备，平台分组返回设备数 {ReportedDeviceCount} 台。";
+        ? $"当前目录共 {LoadedDeviceCount} 台设备。"
+        : $"当前目录本地已落地 {LoadedDeviceCount} 台设备，平台拉回 {ReportedDeviceCount} 台。";
+
+    public string ChildrenHintText => HasChildren
+        ? "包含子目录，子目录会在列表中继续展开显示。"
+        : "当前目录无子目录。";
 
     public string EmptyStateText => LoadedDeviceCount == 0
-        ? "当前分组暂无设备，已按空目录保留，便于人工核对是否完整。"
+        ? "当前目录暂无设备，已按空目录保留，便于人工核对是否完整。"
         : string.Empty;
 }
 
@@ -152,7 +165,7 @@ public sealed record PreviewDeviceLoadResult(
     IReadOnlyList<PreviewDirectoryGroupItem> DirectoryGroups,
     int SnapshotGroupCount,
     int SnapshotDeviceCount,
-    int ReportedDeviceCount,
+    GroupSyncSnapshotMetadata Metadata,
     DateTimeOffset? LastSyncedAt);
 
 public sealed record PreviewPrepareResult(

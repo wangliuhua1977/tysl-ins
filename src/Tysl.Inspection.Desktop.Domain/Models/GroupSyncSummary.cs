@@ -3,9 +3,10 @@ namespace Tysl.Inspection.Desktop.Domain.Models;
 public enum GroupSyncFailureKind
 {
     None = 0,
-    GetGroupListFailed = 1,
-    GetGroupDeviceListFailed = 2,
-    DatabaseWriteFailed = 3
+    GetRegionListFailed = 1,
+    GetRegionDeviceListFailed = 2,
+    GetDeviceCountReconciliationFailed = 3,
+    DatabaseWriteFailed = 4
 }
 
 public sealed record GroupSyncFailure(
@@ -14,13 +15,29 @@ public sealed record GroupSyncFailure(
     string? GroupName,
     string Message);
 
+public sealed record GroupSyncSnapshotMetadata(
+    int PlatformGroupCount,
+    int PlatformDeviceCount,
+    bool ReconciliationCompleted,
+    bool ReconciliationMatched,
+    int ReconciledRegionCount,
+    int ReconciledDeviceCount,
+    int ReconciledOnlineCount,
+    string ReconciliationScopeText)
+{
+    public static GroupSyncSnapshotMetadata Empty { get; } =
+        new(0, 0, false, false, 0, 0, 0, string.Empty);
+}
+
 public sealed record GroupSyncSummary(
     int GroupCount,
     int DeviceCount,
     int SuccessCount,
     int FailureCount,
     DateTimeOffset? LastSyncedAt,
-    IReadOnlyList<GroupSyncFailure> Failures)
+    IReadOnlyList<GroupSyncFailure> Failures,
+    bool SnapshotReplaced,
+    GroupSyncSnapshotMetadata Metadata)
 {
-    public bool IsSuccess => FailureCount == 0;
+    public bool IsSuccess => SnapshotReplaced && FailureCount == 0;
 }

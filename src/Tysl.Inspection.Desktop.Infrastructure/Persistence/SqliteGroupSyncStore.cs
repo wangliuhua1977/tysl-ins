@@ -43,21 +43,7 @@ public sealed class SqliteGroupSyncStore(
 
         foreach (var group in groups)
         {
-            await using var upsert = connection.CreateCommand();
-            upsert.Transaction = transaction;
-            upsert.CommandText = """
-                INSERT INTO "Group"(groupId, groupName, deviceCount, syncedAt)
-                VALUES(@groupId, @groupName, @deviceCount, @syncedAt)
-                ON CONFLICT(groupId) DO UPDATE SET
-                    groupName = excluded.groupName,
-                    deviceCount = excluded.deviceCount,
-                    syncedAt = excluded.syncedAt;
-                """;
-            upsert.Parameters.AddWithValue("@groupId", group.GroupId);
-            upsert.Parameters.AddWithValue("@groupName", group.GroupName);
-            upsert.Parameters.AddWithValue("@deviceCount", group.DeviceCount);
-            upsert.Parameters.AddWithValue("@syncedAt", group.SyncedAt.ToString("O", CultureInfo.InvariantCulture));
-            await upsert.ExecuteNonQueryAsync(cancellationToken);
+            await UpsertGroupAsync(connection, transaction, group, cancellationToken);
         }
 
         await transaction.CommitAsync(cancellationToken);
@@ -66,11 +52,14 @@ public sealed class SqliteGroupSyncStore(
     public async Task ReplaceSnapshotAsync(
         IReadOnlyCollection<InspectionGroup> groups,
         IReadOnlyCollection<InspectionDevice> devices,
+        GroupSyncSnapshotMetadata metadata,
         CancellationToken cancellationToken)
     {
         await using var connection = CreateConnection();
         await connection.OpenAsync(cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+
+        var existingDevices = await LoadExistingDeviceMapAsync(connection, transaction, cancellationToken);
 
         await using (var deleteDevices = connection.CreateCommand())
         {
@@ -79,92 +68,30 @@ public sealed class SqliteGroupSyncStore(
             await deleteDevices.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await using (var deleteMissingGroups = connection.CreateCommand())
+        await using (var deleteGroups = connection.CreateCommand())
         {
-            deleteMissingGroups.Transaction = transaction;
-            if (groups.Count == 0)
-            {
-                deleteMissingGroups.CommandText = """DELETE FROM "Group";""";
-            }
-            else
-            {
-                var placeholders = new List<string>();
-                var index = 0;
-                foreach (var group in groups)
-                {
-                    var parameterName = $"@groupId{index++}";
-                    placeholders.Add(parameterName);
-                    deleteMissingGroups.Parameters.AddWithValue(parameterName, group.GroupId);
-                }
-
-                deleteMissingGroups.CommandText = $"""DELETE FROM "Group" WHERE groupId NOT IN ({string.Join(",", placeholders)});""";
-            }
-
-            await deleteMissingGroups.ExecuteNonQueryAsync(cancellationToken);
+            deleteGroups.Transaction = transaction;
+            deleteGroups.CommandText = """DELETE FROM "Group";""";
+            await deleteGroups.ExecuteNonQueryAsync(cancellationToken);
         }
 
         foreach (var group in groups)
         {
-            await using var upsertGroup = connection.CreateCommand();
-            upsertGroup.Transaction = transaction;
-            upsertGroup.CommandText = """
-                INSERT INTO "Group"(groupId, groupName, deviceCount, syncedAt)
-                VALUES(@groupId, @groupName, @deviceCount, @syncedAt)
-                ON CONFLICT(groupId) DO UPDATE SET
-                    groupName = excluded.groupName,
-                    deviceCount = excluded.deviceCount,
-                    syncedAt = excluded.syncedAt;
-                """;
-            upsertGroup.Parameters.AddWithValue("@groupId", group.GroupId);
-            upsertGroup.Parameters.AddWithValue("@groupName", group.GroupName);
-            upsertGroup.Parameters.AddWithValue("@deviceCount", group.DeviceCount);
-            upsertGroup.Parameters.AddWithValue("@syncedAt", group.SyncedAt.ToString("O", CultureInfo.InvariantCulture));
-            await upsertGroup.ExecuteNonQueryAsync(cancellationToken);
+            await UpsertGroupAsync(connection, transaction, group, cancellationToken);
         }
 
         foreach (var device in devices)
         {
-            await using var insertDevice = connection.CreateCommand();
-            insertDevice.Transaction = transaction;
-            insertDevice.CommandText = """
-                INSERT INTO Device(
-                    deviceCode,
-                    deviceName,
-                    groupId,
-                    latitude,
-                    longitude,
-                    location,
-                    onlineStatus,
-                    cloudStatus,
-                    bandStatus,
-                    sourceTypeFlag,
-                    syncedAt)
-                VALUES(
-                    @deviceCode,
-                    @deviceName,
-                    @groupId,
-                    @latitude,
-                    @longitude,
-                    @location,
-                    @onlineStatus,
-                    @cloudStatus,
-                    @bandStatus,
-                    @sourceTypeFlag,
-                    @syncedAt);
-                """;
-            insertDevice.Parameters.AddWithValue("@deviceCode", device.DeviceCode);
-            insertDevice.Parameters.AddWithValue("@deviceName", device.DeviceName);
-            insertDevice.Parameters.AddWithValue("@groupId", device.GroupId);
-            insertDevice.Parameters.AddWithValue("@latitude", (object?)device.Latitude ?? DBNull.Value);
-            insertDevice.Parameters.AddWithValue("@longitude", (object?)device.Longitude ?? DBNull.Value);
-            insertDevice.Parameters.AddWithValue("@location", (object?)device.Location ?? DBNull.Value);
-            insertDevice.Parameters.AddWithValue("@onlineStatus", (object?)device.OnlineStatus ?? DBNull.Value);
-            insertDevice.Parameters.AddWithValue("@cloudStatus", (object?)device.CloudStatus ?? DBNull.Value);
-            insertDevice.Parameters.AddWithValue("@bandStatus", (object?)device.BandStatus ?? DBNull.Value);
-            insertDevice.Parameters.AddWithValue("@sourceTypeFlag", (object?)device.SourceTypeFlag ?? DBNull.Value);
-            insertDevice.Parameters.AddWithValue("@syncedAt", device.SyncedAt.ToString("O", CultureInfo.InvariantCulture));
-            await insertDevice.ExecuteNonQueryAsync(cancellationToken);
+            var merged = MergeDevice(device, existingDevices);
+            await InsertDeviceAsync(connection, transaction, merged, cancellationToken);
         }
+
+        await UpsertMetadataAsync(
+            connection,
+            transaction,
+            metadata,
+            GetSnapshotSyncedAt(groups, devices),
+            cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
     }
@@ -190,6 +117,8 @@ public sealed class SqliteGroupSyncStore(
         await connection.OpenAsync(cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
 
+        var existingDevices = await LoadExistingDeviceMapAsync(connection, transaction, cancellationToken);
+
         await using (var delete = connection.CreateCommand())
         {
             delete.Transaction = transaction;
@@ -200,46 +129,8 @@ public sealed class SqliteGroupSyncStore(
 
         foreach (var device in devices)
         {
-            await using var insert = connection.CreateCommand();
-            insert.Transaction = transaction;
-            insert.CommandText = """
-                INSERT INTO Device(
-                    deviceCode,
-                    deviceName,
-                    groupId,
-                    latitude,
-                    longitude,
-                    location,
-                    onlineStatus,
-                    cloudStatus,
-                    bandStatus,
-                    sourceTypeFlag,
-                    syncedAt)
-                VALUES(
-                    @deviceCode,
-                    @deviceName,
-                    @groupId,
-                    @latitude,
-                    @longitude,
-                    @location,
-                    @onlineStatus,
-                    @cloudStatus,
-                    @bandStatus,
-                    @sourceTypeFlag,
-                    @syncedAt);
-                """;
-            insert.Parameters.AddWithValue("@deviceCode", device.DeviceCode);
-            insert.Parameters.AddWithValue("@deviceName", device.DeviceName);
-            insert.Parameters.AddWithValue("@groupId", device.GroupId);
-            insert.Parameters.AddWithValue("@latitude", (object?)device.Latitude ?? DBNull.Value);
-            insert.Parameters.AddWithValue("@longitude", (object?)device.Longitude ?? DBNull.Value);
-            insert.Parameters.AddWithValue("@location", (object?)device.Location ?? DBNull.Value);
-            insert.Parameters.AddWithValue("@onlineStatus", (object?)device.OnlineStatus ?? DBNull.Value);
-            insert.Parameters.AddWithValue("@cloudStatus", (object?)device.CloudStatus ?? DBNull.Value);
-            insert.Parameters.AddWithValue("@bandStatus", (object?)device.BandStatus ?? DBNull.Value);
-            insert.Parameters.AddWithValue("@sourceTypeFlag", (object?)device.SourceTypeFlag ?? DBNull.Value);
-            insert.Parameters.AddWithValue("@syncedAt", device.SyncedAt.ToString("O", CultureInfo.InvariantCulture));
-            await insert.ExecuteNonQueryAsync(cancellationToken);
+            var merged = MergeDevice(device, existingDevices);
+            await InsertDeviceAsync(connection, transaction, merged, cancellationToken);
         }
 
         await transaction.CommitAsync(cancellationToken);
@@ -277,10 +168,16 @@ public sealed class SqliteGroupSyncStore(
             SELECT
                 groupId,
                 groupName,
+                parentGroupId,
+                regionCode,
                 deviceCount,
+                level,
+                hasChildren,
+                hasDevice,
+                regionGbId,
                 syncedAt
             FROM "Group"
-            ORDER BY groupName COLLATE NOCASE, groupId;
+            ORDER BY level, groupName COLLATE NOCASE, groupId;
             """;
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -290,8 +187,14 @@ public sealed class SqliteGroupSyncStore(
             groups.Add(new InspectionGroup(
                 ReadString(reader, 0),
                 ReadString(reader, 1),
-                ReadInt32(reader, 2),
-                ReadSyncedAt(reader, 3)));
+                ReadNullableString(reader, 2),
+                ReadString(reader, 3),
+                ReadInt32(reader, 4),
+                ReadInt32(reader, 5),
+                ReadBoolean(reader, 6),
+                ReadBoolean(reader, 7),
+                ReadNullableString(reader, 8),
+                ReadSyncedAt(reader, 9)));
         }
 
         return groups;
@@ -324,18 +227,7 @@ public sealed class SqliteGroupSyncStore(
         var devices = new List<InspectionDevice>();
         while (await reader.ReadAsync(cancellationToken))
         {
-            devices.Add(new InspectionDevice(
-                ReadString(reader, 0),
-                ReadString(reader, 1),
-                ReadString(reader, 2),
-                ReadNullableString(reader, 3),
-                ReadNullableString(reader, 4),
-                ReadNullableString(reader, 5),
-                ReadNullableInt32(reader, 6),
-                ReadNullableInt32(reader, 7),
-                ReadNullableInt32(reader, 8),
-                ReadNullableInt32(reader, 9),
-                ReadSyncedAt(reader, 10)));
+            devices.Add(ReadDevice(reader));
         }
 
         return devices;
@@ -348,13 +240,272 @@ public sealed class SqliteGroupSyncStore(
 
         var groupCount = await ExecuteScalarIntAsync(connection, """SELECT COUNT(*) FROM "Group";""", cancellationToken);
         var deviceCount = await ExecuteScalarIntAsync(connection, "SELECT COUNT(*) FROM Device;", cancellationToken);
+        var metadata = await ReadMetadataAsync(connection, cancellationToken);
         var lastSyncedAt = await GetLastSyncedAtAsync(connection, cancellationToken);
-        return new LocalSyncSnapshot(groupCount, deviceCount, lastSyncedAt);
+        return new LocalSyncSnapshot(groupCount, deviceCount, lastSyncedAt, metadata);
     }
 
     private SqliteConnection CreateConnection()
     {
         return new SqliteConnection(SqliteBootstrapper.BuildConnectionString(databaseOptions.Value, runtimePaths));
+    }
+
+    private static async Task UpsertGroupAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        InspectionGroup group,
+        CancellationToken cancellationToken)
+    {
+        await using var upsert = connection.CreateCommand();
+        upsert.Transaction = transaction;
+        upsert.CommandText = """
+            INSERT INTO "Group"(
+                groupId,
+                groupName,
+                deviceCount,
+                syncedAt,
+                parentGroupId,
+                regionCode,
+                level,
+                hasChildren,
+                hasDevice,
+                regionGbId)
+            VALUES(
+                @groupId,
+                @groupName,
+                @deviceCount,
+                @syncedAt,
+                @parentGroupId,
+                @regionCode,
+                @level,
+                @hasChildren,
+                @hasDevice,
+                @regionGbId)
+            ON CONFLICT(groupId) DO UPDATE SET
+                groupName = excluded.groupName,
+                deviceCount = excluded.deviceCount,
+                syncedAt = excluded.syncedAt,
+                parentGroupId = excluded.parentGroupId,
+                regionCode = excluded.regionCode,
+                level = excluded.level,
+                hasChildren = excluded.hasChildren,
+                hasDevice = excluded.hasDevice,
+                regionGbId = excluded.regionGbId;
+            """;
+        upsert.Parameters.AddWithValue("@groupId", group.GroupId);
+        upsert.Parameters.AddWithValue("@groupName", group.GroupName);
+        upsert.Parameters.AddWithValue("@deviceCount", group.DeviceCount);
+        upsert.Parameters.AddWithValue("@syncedAt", group.SyncedAt.ToString("O", CultureInfo.InvariantCulture));
+        upsert.Parameters.AddWithValue("@parentGroupId", (object?)group.ParentGroupId ?? DBNull.Value);
+        upsert.Parameters.AddWithValue("@regionCode", group.RegionCode);
+        upsert.Parameters.AddWithValue("@level", group.Level);
+        upsert.Parameters.AddWithValue("@hasChildren", group.HasChildren ? 1 : 0);
+        upsert.Parameters.AddWithValue("@hasDevice", group.HasDevice ? 1 : 0);
+        upsert.Parameters.AddWithValue("@regionGbId", (object?)group.RegionGbId ?? DBNull.Value);
+        await upsert.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task InsertDeviceAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        InspectionDevice device,
+        CancellationToken cancellationToken)
+    {
+        await using var insert = connection.CreateCommand();
+        insert.Transaction = transaction;
+        insert.CommandText = """
+            INSERT INTO Device(
+                deviceCode,
+                deviceName,
+                groupId,
+                latitude,
+                longitude,
+                location,
+                onlineStatus,
+                cloudStatus,
+                bandStatus,
+                sourceTypeFlag,
+                syncedAt)
+            VALUES(
+                @deviceCode,
+                @deviceName,
+                @groupId,
+                @latitude,
+                @longitude,
+                @location,
+                @onlineStatus,
+                @cloudStatus,
+                @bandStatus,
+                @sourceTypeFlag,
+                @syncedAt);
+            """;
+        insert.Parameters.AddWithValue("@deviceCode", device.DeviceCode);
+        insert.Parameters.AddWithValue("@deviceName", device.DeviceName);
+        insert.Parameters.AddWithValue("@groupId", device.GroupId);
+        insert.Parameters.AddWithValue("@latitude", (object?)device.Latitude ?? DBNull.Value);
+        insert.Parameters.AddWithValue("@longitude", (object?)device.Longitude ?? DBNull.Value);
+        insert.Parameters.AddWithValue("@location", (object?)device.Location ?? DBNull.Value);
+        insert.Parameters.AddWithValue("@onlineStatus", (object?)device.OnlineStatus ?? DBNull.Value);
+        insert.Parameters.AddWithValue("@cloudStatus", (object?)device.CloudStatus ?? DBNull.Value);
+        insert.Parameters.AddWithValue("@bandStatus", (object?)device.BandStatus ?? DBNull.Value);
+        insert.Parameters.AddWithValue("@sourceTypeFlag", (object?)device.SourceTypeFlag ?? DBNull.Value);
+        insert.Parameters.AddWithValue("@syncedAt", device.SyncedAt.ToString("O", CultureInfo.InvariantCulture));
+        await insert.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<Dictionary<string, InspectionDevice>> LoadExistingDeviceMapAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT
+                deviceCode,
+                deviceName,
+                groupId,
+                latitude,
+                longitude,
+                location,
+                onlineStatus,
+                cloudStatus,
+                bandStatus,
+                sourceTypeFlag,
+                syncedAt
+            FROM Device;
+            """;
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var devices = new Dictionary<string, InspectionDevice>(StringComparer.OrdinalIgnoreCase);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var device = ReadDevice(reader);
+            devices[device.DeviceCode] = device;
+        }
+
+        return devices;
+    }
+
+    private static InspectionDevice MergeDevice(
+        InspectionDevice device,
+        IReadOnlyDictionary<string, InspectionDevice> existingDevices)
+    {
+        if (!existingDevices.TryGetValue(device.DeviceCode, out var existingDevice))
+        {
+            return device;
+        }
+
+        return device with
+        {
+            Latitude = device.Latitude ?? existingDevice.Latitude,
+            Longitude = device.Longitude ?? existingDevice.Longitude,
+            Location = device.Location ?? existingDevice.Location,
+            OnlineStatus = device.OnlineStatus ?? existingDevice.OnlineStatus,
+            CloudStatus = device.CloudStatus ?? existingDevice.CloudStatus,
+            BandStatus = device.BandStatus ?? existingDevice.BandStatus,
+            SourceTypeFlag = device.SourceTypeFlag ?? existingDevice.SourceTypeFlag
+        };
+    }
+
+    private static async Task UpsertMetadataAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        GroupSyncSnapshotMetadata metadata,
+        DateTimeOffset? syncedAt,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO SyncMetadata(
+                id,
+                platformGroupCount,
+                platformDeviceCount,
+                reconciliationCompleted,
+                reconciliationMatched,
+                reconciledRegionCount,
+                reconciledDeviceCount,
+                reconciledOnlineCount,
+                reconciliationScopeText,
+                syncedAt)
+            VALUES(
+                1,
+                @platformGroupCount,
+                @platformDeviceCount,
+                @reconciliationCompleted,
+                @reconciliationMatched,
+                @reconciledRegionCount,
+                @reconciledDeviceCount,
+                @reconciledOnlineCount,
+                @reconciliationScopeText,
+                @syncedAt)
+            ON CONFLICT(id) DO UPDATE SET
+                platformGroupCount = excluded.platformGroupCount,
+                platformDeviceCount = excluded.platformDeviceCount,
+                reconciliationCompleted = excluded.reconciliationCompleted,
+                reconciliationMatched = excluded.reconciliationMatched,
+                reconciledRegionCount = excluded.reconciledRegionCount,
+                reconciledDeviceCount = excluded.reconciledDeviceCount,
+                reconciledOnlineCount = excluded.reconciledOnlineCount,
+                reconciliationScopeText = excluded.reconciliationScopeText,
+                syncedAt = excluded.syncedAt;
+            """;
+        command.Parameters.AddWithValue("@platformGroupCount", metadata.PlatformGroupCount);
+        command.Parameters.AddWithValue("@platformDeviceCount", metadata.PlatformDeviceCount);
+        command.Parameters.AddWithValue("@reconciliationCompleted", metadata.ReconciliationCompleted ? 1 : 0);
+        command.Parameters.AddWithValue("@reconciliationMatched", metadata.ReconciliationMatched ? 1 : 0);
+        command.Parameters.AddWithValue("@reconciledRegionCount", metadata.ReconciledRegionCount);
+        command.Parameters.AddWithValue("@reconciledDeviceCount", metadata.ReconciledDeviceCount);
+        command.Parameters.AddWithValue("@reconciledOnlineCount", metadata.ReconciledOnlineCount);
+        command.Parameters.AddWithValue("@reconciliationScopeText", metadata.ReconciliationScopeText);
+        command.Parameters.AddWithValue("@syncedAt", syncedAt?.ToString("O", CultureInfo.InvariantCulture) ?? (object)DBNull.Value);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<GroupSyncSnapshotMetadata> ReadMetadataAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+                platformGroupCount,
+                platformDeviceCount,
+                reconciliationCompleted,
+                reconciliationMatched,
+                reconciledRegionCount,
+                reconciledDeviceCount,
+                reconciledOnlineCount,
+                reconciliationScopeText
+            FROM SyncMetadata
+            WHERE id = 1;
+            """;
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return GroupSyncSnapshotMetadata.Empty;
+        }
+
+        return new GroupSyncSnapshotMetadata(
+            ReadInt32(reader, 0),
+            ReadInt32(reader, 1),
+            ReadBoolean(reader, 2),
+            ReadBoolean(reader, 3),
+            ReadInt32(reader, 4),
+            ReadInt32(reader, 5),
+            ReadInt32(reader, 6),
+            ReadString(reader, 7));
+    }
+
+    private static DateTimeOffset? GetSnapshotSyncedAt(
+        IReadOnlyCollection<InspectionGroup> groups,
+        IReadOnlyCollection<InspectionDevice> devices)
+    {
+        var values = groups.Select(group => group.SyncedAt)
+            .Concat(devices.Select(device => device.SyncedAt))
+            .ToArray();
+
+        return values.Length == 0 ? null : values.Max();
     }
 
     private static async Task<int> ExecuteScalarIntAsync(
@@ -372,6 +523,21 @@ public sealed class SqliteGroupSyncStore(
     {
         await using var command = connection.CreateCommand();
         command.CommandText = """
+            SELECT syncedAt
+            FROM SyncMetadata
+            WHERE id = 1;
+            """;
+
+        var result = await command.ExecuteScalarAsync(cancellationToken);
+        if (result is not null
+            && result is not DBNull
+            && DateTimeOffset.TryParse(result.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var syncedAt))
+        {
+            return syncedAt;
+        }
+
+        await using var fallbackCommand = connection.CreateCommand();
+        fallbackCommand.CommandText = """
             SELECT MAX(syncedAt)
             FROM (
                 SELECT syncedAt FROM "Group"
@@ -380,15 +546,31 @@ public sealed class SqliteGroupSyncStore(
             );
             """;
 
-        var result = await command.ExecuteScalarAsync(cancellationToken);
-        if (result is null || result is DBNull)
+        var fallback = await fallbackCommand.ExecuteScalarAsync(cancellationToken);
+        if (fallback is null || fallback is DBNull)
         {
             return null;
         }
 
-        return DateTimeOffset.TryParse(result.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
+        return DateTimeOffset.TryParse(fallback.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
             ? parsed
             : null;
+    }
+
+    private static InspectionDevice ReadDevice(SqliteDataReader reader)
+    {
+        return new InspectionDevice(
+            ReadString(reader, 0),
+            ReadString(reader, 1),
+            ReadString(reader, 2),
+            ReadNullableString(reader, 3),
+            ReadNullableString(reader, 4),
+            ReadNullableString(reader, 5),
+            ReadNullableInt32(reader, 6),
+            ReadNullableInt32(reader, 7),
+            ReadNullableInt32(reader, 8),
+            ReadNullableInt32(reader, 9),
+            ReadSyncedAt(reader, 10));
     }
 
     private static string ReadString(SqliteDataReader reader, int ordinal)
@@ -433,6 +615,11 @@ public sealed class SqliteGroupSyncStore(
             _ when int.TryParse(value.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) => parsed,
             _ => null
         };
+    }
+
+    private static bool ReadBoolean(SqliteDataReader reader, int ordinal)
+    {
+        return ReadInt32(reader, ordinal) == 1;
     }
 
     private static DateTimeOffset ReadSyncedAt(SqliteDataReader reader, int ordinal)

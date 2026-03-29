@@ -9,7 +9,7 @@ namespace Tysl.Inspection.Desktop.Tests;
 public sealed class PreviewServiceTests
 {
     [Fact]
-    public async Task LoadLocalDevicesAsync_ReturnsGroupedRealDirectory()
+    public async Task LoadLocalDevicesAsync_ReturnsMonitorRegionTree()
     {
         var store = new StubGroupSyncStore();
         var service = CreateService(groupStore: store);
@@ -19,7 +19,8 @@ public sealed class PreviewServiceTests
         Assert.True(result.Success);
         Assert.Single(result.Devices);
         var group = Assert.Single(result.DirectoryGroups);
-        Assert.Equal("默认分组", group.GroupName);
+        Assert.Equal("默认目录", group.GroupName);
+        Assert.Equal("层级 1 / 根目录", group.HierarchyText);
         Assert.Equal(1, group.ReportedDeviceCount);
         Assert.True(group.CountMatches);
         var device = Assert.Single(group.Devices);
@@ -27,25 +28,29 @@ public sealed class PreviewServiceTests
         Assert.Equal("在线", device.OnlineStatusText);
         Assert.Equal(1, result.SnapshotGroupCount);
         Assert.Equal(1, result.SnapshotDeviceCount);
-        Assert.Equal(1, result.ReportedDeviceCount);
+        Assert.Equal(1, result.Metadata.PlatformGroupCount);
+        Assert.Equal(1, result.Metadata.PlatformDeviceCount);
+        Assert.True(result.Metadata.ReconciliationCompleted);
+        Assert.True(result.Metadata.ReconciliationMatched);
         Assert.Equal(DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"), result.LastSyncedAt);
     }
 
     [Fact]
-    public async Task LoadLocalDevicesAsync_KeepsUnlocatedDevicesAndEmptyGroups()
+    public async Task LoadLocalDevicesAsync_KeepsUnlocatedDevices_AndEmptyDirectories()
     {
         var store = new StubGroupSyncStore
         {
             Groups =
             [
-                new InspectionGroup("group-001", "默认分组", 2, DateTimeOffset.Parse("2026-03-28T09:58:00+08:00")),
-                new InspectionGroup("group-002", "空目录", 0, DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"))
+                new InspectionGroup("group-001", "默认目录", null, "R-001", 2, 1, true, true, null, DateTimeOffset.Parse("2026-03-28T09:58:00+08:00")),
+                new InspectionGroup("group-001-01", "二级空目录", "group-001", "R-001-01", 0, 2, false, false, null, DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"))
             ],
             Devices =
             [
                 new InspectionDevice("dev-001", "测试设备", "group-001", "31.2304", "121.4737", "上海", 1, 1, 1, 0, DateTimeOffset.UtcNow),
                 new InspectionDevice("dev-002", "无坐标设备", "group-001", null, null, "未定位", 0, 1, 0, 0, DateTimeOffset.UtcNow)
-            ]
+            ],
+            Metadata = new GroupSyncSnapshotMetadata(2, 2, true, true, 1, 2, 1, "首层 regionCode：R-001")
         };
         var service = CreateService(groupStore: store);
 
@@ -54,13 +59,13 @@ public sealed class PreviewServiceTests
         Assert.True(result.Success);
         Assert.Equal(2, result.SnapshotGroupCount);
         Assert.Equal(2, result.SnapshotDeviceCount);
-        Assert.Equal(2, result.ReportedDeviceCount);
-        var mainGroup = Assert.Single(result.DirectoryGroups, group => group.GroupId == "group-001");
-        Assert.Equal(2, mainGroup.Devices.Count);
-        Assert.Contains(mainGroup.Devices, device => device.DeviceCode == "dev-002");
-        var emptyGroup = Assert.Single(result.DirectoryGroups, group => group.GroupId == "group-002");
+        Assert.Equal(2, result.Metadata.PlatformDeviceCount);
+        var rootGroup = Assert.Single(result.DirectoryGroups, group => group.GroupId == "group-001");
+        Assert.Equal(2, rootGroup.Devices.Count);
+        Assert.Contains(rootGroup.Devices, device => device.DeviceCode == "dev-002");
+        var emptyGroup = Assert.Single(result.DirectoryGroups, group => group.GroupId == "group-001-01");
         Assert.Empty(emptyGroup.Devices);
-        Assert.Contains("空目录", emptyGroup.DisplayText);
+        Assert.Equal("层级 2 / 上级：默认目录", emptyGroup.HierarchyText);
         Assert.False(string.IsNullOrWhiteSpace(emptyGroup.EmptyStateText));
     }
 
@@ -71,13 +76,14 @@ public sealed class PreviewServiceTests
         {
             Groups =
             [
-                new InspectionGroup("group-001", "默认分组", 2, DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"))
+                new InspectionGroup("group-001", "默认目录", null, "R-001", 2, 1, false, true, null, DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"))
             ],
             Devices =
             [
                 new InspectionDevice("dev-001", "测试设备", "group-001", "31.2304", "121.4737", "上海", 1, 1, 1, 0, DateTimeOffset.UtcNow),
                 new InspectionDevice("dev-002", "无坐标设备", "group-001", null, null, "未定位", 0, 1, 0, 0, DateTimeOffset.UtcNow)
-            ]
+            ],
+            Metadata = new GroupSyncSnapshotMetadata(1, 2, true, true, 1, 2, 1, "首层 regionCode：R-001")
         };
         var service = CreateService(groupStore: store);
         var overviewStatsService = new OverviewStatsService(store);
@@ -456,19 +462,27 @@ public sealed class PreviewServiceTests
                     DateTimeOffset.UtcNow.AddDays(30))
             };
 
-        public OpenPlatformCallResult<IReadOnlyList<OpenPlatformGroupDto>> GroupListResult { get; set; } =
+        public OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDto>> RegionListResult { get; set; } =
             new()
             {
                 Success = true,
-                EndpointName = "getGroupList",
+                EndpointName = "getReginWithGroupList",
                 Payload = []
             };
 
-        public OpenPlatformCallResult<IReadOnlyList<OpenPlatformDeviceDto>> GroupDeviceListResult { get; set; } =
+        public OpenPlatformCallResult<OpenPlatformRegionDevicePageDto> RegionDevicePageResult { get; set; } =
             new()
             {
                 Success = true,
-                EndpointName = "getGroupDeviceList",
+                EndpointName = "getDeviceList",
+                Payload = new OpenPlatformRegionDevicePageDto([], 1, 50, 0)
+            };
+
+        public OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDeviceCountDto>> RegionDeviceCountResult { get; set; } =
+            new()
+            {
+                Success = true,
+                EndpointName = "getCusDeviceCount",
                 Payload = []
             };
 
@@ -493,14 +507,25 @@ public sealed class PreviewServiceTests
             return Task.FromResult(AccessTokenResult);
         }
 
-        public Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformGroupDto>>> GetGroupListAsync(CancellationToken cancellationToken)
+        public Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDto>>> GetRegionListAsync(string regionId, CancellationToken cancellationToken)
         {
-            return Task.FromResult(GroupListResult);
+            return Task.FromResult(RegionListResult);
         }
 
-        public Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformDeviceDto>>> GetGroupDeviceListAsync(string groupId, CancellationToken cancellationToken)
+        public Task<OpenPlatformCallResult<OpenPlatformRegionDevicePageDto>> GetRegionDevicePageAsync(
+            string regionId,
+            int pageNo,
+            int pageSize,
+            CancellationToken cancellationToken)
         {
-            return Task.FromResult(GroupDeviceListResult);
+            return Task.FromResult(RegionDevicePageResult);
+        }
+
+        public Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDeviceCountDto>>> GetRegionDeviceCountsAsync(
+            string regionCode,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult(RegionDeviceCountResult);
         }
 
         public Task<OpenPlatformCallResult<OpenPlatformDeviceStatusPayload>> GetDeviceStatusAsync(string deviceCode, CancellationToken cancellationToken)
@@ -536,7 +561,7 @@ public sealed class PreviewServiceTests
     {
         public IReadOnlyList<InspectionGroup> Groups { get; set; } =
         [
-            new InspectionGroup("group-001", "默认分组", 1, DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"))
+            new InspectionGroup("group-001", "默认目录", null, "R-001", 1, 1, false, true, null, DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"))
         ];
 
         public IReadOnlyList<InspectionDevice> Devices { get; set; } =
@@ -555,6 +580,9 @@ public sealed class PreviewServiceTests
                 DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"))
         ];
 
+        public GroupSyncSnapshotMetadata Metadata { get; set; } =
+            new(1, 1, true, true, 1, 1, 1, "首层 regionCode：R-001");
+
         public Task ReplaceGroupsAsync(IReadOnlyCollection<InspectionGroup> groups, CancellationToken cancellationToken)
         {
             Groups = groups.ToArray();
@@ -564,10 +592,12 @@ public sealed class PreviewServiceTests
         public Task ReplaceSnapshotAsync(
             IReadOnlyCollection<InspectionGroup> groups,
             IReadOnlyCollection<InspectionDevice> devices,
+            GroupSyncSnapshotMetadata metadata,
             CancellationToken cancellationToken)
         {
             Groups = groups.ToArray();
             Devices = devices.ToArray();
+            Metadata = metadata;
             return Task.CompletedTask;
         }
 
@@ -608,7 +638,7 @@ public sealed class PreviewServiceTests
 
         public Task<LocalSyncSnapshot> GetLocalSyncSnapshotAsync(CancellationToken cancellationToken)
         {
-            return Task.FromResult(new LocalSyncSnapshot(Groups.Count, Devices.Count, GetLastSyncedAt()));
+            return Task.FromResult(new LocalSyncSnapshot(Groups.Count, Devices.Count, GetLastSyncedAt(), Metadata));
         }
 
         private DateTimeOffset? GetLastSyncedAt()

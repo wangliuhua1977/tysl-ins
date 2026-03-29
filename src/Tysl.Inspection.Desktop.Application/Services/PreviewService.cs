@@ -19,6 +19,8 @@ public sealed class PreviewService(
             var devices = await groupSyncStore.GetDevicesAsync(cancellationToken);
             var snapshot = await groupSyncStore.GetLocalSyncSnapshotAsync(cancellationToken);
             var devicesByGroup = devices.ToLookup(device => device.GroupId, StringComparer.OrdinalIgnoreCase);
+            var groupNameById = groups.ToDictionary(group => group.GroupId, group => group.GroupName, StringComparer.OrdinalIgnoreCase);
+            var orderedGroups = OrderGroupsForDisplay(groups);
 
             var payload = devices
                 .OrderBy(device => device.DeviceName, StringComparer.OrdinalIgnoreCase)
@@ -26,13 +28,17 @@ public sealed class PreviewService(
                 .Select(device => new PreviewDeviceOption(device.DeviceCode, device.DeviceName, device.OnlineStatus))
                 .ToArray();
 
-            var directoryGroups = groups
-                .OrderBy(group => group.GroupName, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(group => group.GroupId, StringComparer.OrdinalIgnoreCase)
+            var directoryGroups = orderedGroups
                 .Select(group => new PreviewDirectoryGroupItem(
                     group.GroupId,
                     group.GroupName,
+                    group.ParentGroupId,
+                    group.ParentGroupId is not null && groupNameById.TryGetValue(group.ParentGroupId, out var parentGroupName)
+                        ? parentGroupName
+                        : string.Empty,
+                    group.Level,
                     group.DeviceCount,
+                    group.HasChildren,
                     devicesByGroup[group.GroupId]
                         .OrderBy(device => device.DeviceName, StringComparer.OrdinalIgnoreCase)
                         .ThenBy(device => device.DeviceCode, StringComparer.OrdinalIgnoreCase)
@@ -40,7 +46,6 @@ public sealed class PreviewService(
                         .ToArray()))
                 .ToArray();
 
-            var reportedDeviceCount = groups.Sum(group => Math.Max(group.DeviceCount, 0));
             var emptyGroupCount = directoryGroups.Count(group => group.LoadedDeviceCount == 0);
             var mismatchedGroups = directoryGroups
                 .Where(group => !group.CountMatches)
@@ -48,12 +53,15 @@ public sealed class PreviewService(
                 .ToArray();
 
             logger.LogInformation(
-                "Loaded full real device directory for preview page. SnapshotGroups={SnapshotGroupCount}, SnapshotDevices={SnapshotDeviceCount}, BoundGroups={BoundGroupCount}, BoundDevices={BoundDeviceCount}, ReportedDevices={ReportedDeviceCount}, EmptyGroups={EmptyGroupCount}, LastSyncedAt={LastSyncedAt}.",
+                "Loaded monitor region tree for preview page. SnapshotGroups={SnapshotGroupCount}, SnapshotDevices={SnapshotDeviceCount}, BoundGroups={BoundGroupCount}, BoundDevices={BoundDeviceCount}, PlatformGroups={PlatformGroupCount}, PlatformDevices={PlatformDeviceCount}, ReconciliationCompleted={ReconciliationCompleted}, ReconciliationMatched={ReconciliationMatched}, EmptyGroups={EmptyGroupCount}, LastSyncedAt={LastSyncedAt}.",
                 snapshot.GroupCount,
                 snapshot.DeviceCount,
                 directoryGroups.Length,
                 payload.Length,
-                reportedDeviceCount,
+                snapshot.Metadata.PlatformGroupCount,
+                snapshot.Metadata.PlatformDeviceCount,
+                snapshot.Metadata.ReconciliationCompleted,
+                snapshot.Metadata.ReconciliationMatched,
                 emptyGroupCount,
                 snapshot.LastSyncedAt?.ToString("O") ?? "null");
 
@@ -81,12 +89,12 @@ public sealed class PreviewService(
                 directoryGroups,
                 snapshot.GroupCount,
                 snapshot.DeviceCount,
-                reportedDeviceCount,
+                snapshot.Metadata,
                 snapshot.LastSyncedAt);
         }
         catch (Exception exception)
         {
-            logger.LogError(exception, "Failed to load real device directory for preview page.");
+            logger.LogError(exception, "Failed to load monitor region tree for preview page.");
             return new PreviewDeviceLoadResult(
                 false,
                 BuildSqliteMessage(exception),
@@ -94,7 +102,7 @@ public sealed class PreviewService(
                 Array.Empty<PreviewDirectoryGroupItem>(),
                 0,
                 0,
-                0,
+                GroupSyncSnapshotMetadata.Empty,
                 null);
         }
     }
@@ -613,9 +621,10 @@ public sealed class PreviewService(
 
         if (message.Contains("no such table", StringComparison.OrdinalIgnoreCase)
             || message.Contains("Device", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("Group", StringComparison.OrdinalIgnoreCase))
+            || message.Contains("Group", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("SyncMetadata", StringComparison.OrdinalIgnoreCase))
         {
-            return "本地 SQLite 中缺少 Group / Device 表，请先完成初始化或同步。";
+            return "本地 SQLite 中缺少目录 / 设备 / 同步元数据表，请先完成初始化或同步。";
         }
 
         return $"本地点位读取失败：{message}";
@@ -631,6 +640,46 @@ public sealed class PreviewService(
         return value.Length <= 12
             ? "****"
             : $"{value[..6]}****{value[^6..]}";
+    }
+
+    private static IReadOnlyList<InspectionGroup> OrderGroupsForDisplay(IReadOnlyList<InspectionGroup> groups)
+    {
+        var childrenLookup = groups
+            .OrderBy(group => group.GroupName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(group => group.GroupId, StringComparer.OrdinalIgnoreCase)
+            .ToLookup(group => group.ParentGroupId ?? string.Empty, StringComparer.OrdinalIgnoreCase);
+        var ordered = new List<InspectionGroup>(groups.Count);
+        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var root in childrenLookup[string.Empty])
+        {
+            Append(root);
+        }
+
+        foreach (var group in groups
+                     .Where(group => !visited.Contains(group.GroupId))
+                     .OrderBy(group => group.Level)
+                     .ThenBy(group => group.GroupName, StringComparer.OrdinalIgnoreCase)
+                     .ThenBy(group => group.GroupId, StringComparer.OrdinalIgnoreCase))
+        {
+            Append(group);
+        }
+
+        return ordered;
+
+        void Append(InspectionGroup group)
+        {
+            if (!visited.Add(group.GroupId))
+            {
+                return;
+            }
+
+            ordered.Add(group);
+            foreach (var child in childrenLookup[group.GroupId])
+            {
+                Append(child);
+            }
+        }
     }
 
     private sealed record PreviewFlow(

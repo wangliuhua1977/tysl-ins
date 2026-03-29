@@ -3,13 +3,14 @@ using Tysl.Inspection.Desktop.Application.Abstractions;
 using Tysl.Inspection.Desktop.Application.Services;
 using Tysl.Inspection.Desktop.App.Services;
 using Tysl.Inspection.Desktop.App.ViewModels;
+using Tysl.Inspection.Desktop.Domain.Models;
 
 namespace Tysl.Inspection.Desktop.Tests;
 
 public sealed class PreviewPageViewModelTests
 {
     [Fact]
-    public async Task InitializeAsync_LoadsRealDirectoryIntoUi()
+    public async Task InitializeAsync_LoadsMonitorRegionTreeIntoUi()
     {
         var viewModel = new PreviewPageViewModel(
             new StubPreviewService(),
@@ -20,15 +21,17 @@ public sealed class PreviewPageViewModelTests
         await viewModel.InitializeAsync();
 
         var group = Assert.Single(viewModel.DirectoryGroups);
-        Assert.Equal("默认分组", group.GroupName);
+        Assert.Equal("默认目录", group.GroupName);
+        Assert.Equal("层级 1 / 根目录", group.HierarchyText);
         var device = Assert.Single(group.Devices);
         Assert.Equal("测试设备", device.DeviceName);
         Assert.Equal("在线", device.OnlineStatusText);
         Assert.Equal(1, viewModel.DirectoryGroupCount);
         Assert.Equal(1, viewModel.DirectoryDeviceCount);
+        Assert.Equal("目录 1 / 设备 1", viewModel.DirectoryPlatformSummaryText);
         Assert.True(viewModel.DirectoryCountsMatch);
         Assert.Contains("当前目录绑定与本地 SQLite 快照一致", viewModel.DirectoryVerificationText);
-        Assert.Contains("当前展示的是本地 SQLite 已落地的全部目录与全部设备", viewModel.DirectoryStatusText);
+        Assert.Contains("当前展示的是真实监控目录树与目录层级设备", viewModel.DirectoryStatusText);
     }
 
     [Fact]
@@ -42,12 +45,16 @@ public sealed class PreviewPageViewModelTests
                 [new PreviewDeviceOption("dev-001", "测试设备", 1)],
                 [new PreviewDirectoryGroupItem(
                     "group-001",
-                    "默认分组",
+                    "默认目录",
+                    null,
+                    string.Empty,
+                    1,
                     2,
+                    false,
                     [new PreviewDirectoryDeviceItem("dev-001", "测试设备", 1)])],
                 2,
                 3,
-                3,
+                new GroupSyncSnapshotMetadata(2, 3, true, false, 1, 3, 2, "首层 regionCode：R-001"),
                 DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"))
         };
         var viewModel = new PreviewPageViewModel(
@@ -60,6 +67,7 @@ public sealed class PreviewPageViewModelTests
 
         Assert.False(viewModel.DirectoryCountsMatch);
         Assert.Contains("当前目录绑定与本地 SQLite 快照不一致", viewModel.DirectoryVerificationText);
+        Assert.Contains("结果存在差异", viewModel.DirectoryVerificationText);
     }
 
     [Fact]
@@ -439,12 +447,16 @@ public sealed class PreviewPageViewModelTests
             [new PreviewDeviceOption("dev-001", "测试设备", 1)],
             [new PreviewDirectoryGroupItem(
                 "group-001",
-                "默认分组",
+                "默认目录",
+                null,
+                string.Empty,
                 1,
+                1,
+                false,
                 [new PreviewDirectoryDeviceItem("dev-001", "测试设备", 1)])],
             1,
             1,
-            1,
+            new GroupSyncSnapshotMetadata(1, 1, true, true, 1, 1, 1, "首层 regionCode：R-001"),
             DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"));
 
         public PreviewPrepareResult PrepareResult { get; set; } = new(

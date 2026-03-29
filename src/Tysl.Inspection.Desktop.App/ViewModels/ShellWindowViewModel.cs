@@ -32,7 +32,7 @@ public sealed partial class ShellWindowViewModel : ObservableObject
 
     public string PhaseText => "Phase 0 / 首版最小闭环收口";
 
-    public string ScopeText => "当前轮次聚焦真实设备目录与所有点位可见、异常池单条复检和最小恢复确认；不扩工单、通知、批量巡检。";
+    public string ScopeText => "当前轮次聚焦监控目录树主链路切换：目录递归、设备分页拉全、SQLite 全量快照和最小对账；不扩工单、通知、批量巡检。";
 
     public async Task InitializeAsync()
     {

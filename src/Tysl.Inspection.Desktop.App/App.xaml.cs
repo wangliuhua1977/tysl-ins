@@ -47,11 +47,17 @@ public partial class App : System.Windows.Application
             var syncService = host.Services.GetRequiredService<IGroupSyncService>();
             var summary = await syncService.SyncAsync(CancellationToken.None);
             Console.WriteLine(
-                "SYNC SUMMARY groups={0} devices={1} success={2} failure={3} lastSyncedAt={4}",
+                "SYNC SUMMARY directories={0} devices={1} success={2} failure={3} snapshotReplaced={4} platformDirectories={5} platformDevices={6} reconcileCompleted={7} reconcileMatched={8} reconcileScope={9} lastSyncedAt={10}",
                 summary.GroupCount,
                 summary.DeviceCount,
                 summary.SuccessCount,
                 summary.FailureCount,
+                summary.SnapshotReplaced,
+                summary.Metadata.PlatformGroupCount,
+                summary.Metadata.PlatformDeviceCount,
+                summary.Metadata.ReconciliationCompleted,
+                summary.Metadata.ReconciliationMatched,
+                summary.Metadata.ReconciliationScopeText,
                 summary.LastSyncedAt?.ToString("O") ?? "null");
             foreach (var failure in summary.Failures)
             {

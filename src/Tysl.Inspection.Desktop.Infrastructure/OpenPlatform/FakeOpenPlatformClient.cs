@@ -4,6 +4,41 @@ namespace Tysl.Inspection.Desktop.Infrastructure.OpenPlatform;
 
 public sealed class FakeOpenPlatformClient : IOpenPlatformClient
 {
+    private static readonly IReadOnlyList<OpenPlatformRegionDto> RootRegions =
+    [
+        new("region-demo-001", "R-001", 1, 1, "离线开发监控目录 A", 1, "GB-001"),
+        new("region-demo-002", "R-002", 0, 0, "离线开发空目录", 1, "GB-002")
+    ];
+
+    private static readonly IReadOnlyDictionary<string, IReadOnlyList<OpenPlatformRegionDto>> ChildRegions =
+        new Dictionary<string, IReadOnlyList<OpenPlatformRegionDto>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["region-demo-001"] =
+            [
+                new OpenPlatformRegionDto("region-demo-001-01", "R-001-01", 0, 1, "离线开发子目录 A-1", 2, "GB-001-01")
+            ]
+        };
+
+    private static readonly IReadOnlyDictionary<string, IReadOnlyList<OpenPlatformRegionDeviceDto>> DevicesByRegion =
+        new Dictionary<string, IReadOnlyList<OpenPlatformRegionDeviceDto>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["region-demo-001"] =
+            [
+                new OpenPlatformRegionDeviceDto("dev-001", "离线设备 1"),
+                new OpenPlatformRegionDeviceDto("dev-002", "离线设备 2")
+            ],
+            ["region-demo-001-01"] =
+            [
+                new OpenPlatformRegionDeviceDto("dev-003", "离线设备 3")
+            ]
+        };
+
+    private static readonly IReadOnlyList<OpenPlatformRegionDeviceCountDto> RootCounts =
+    [
+        new("R-001", 3, 2),
+        new("R-002", 0, 0)
+    ];
+
     public Task<OpenPlatformCallResult<OpenPlatformAccessTokenPayload>> GetAccessTokenAsync(CancellationToken cancellationToken)
     {
         var requestedAt = DateTimeOffset.UtcNow;
@@ -22,45 +57,66 @@ public sealed class FakeOpenPlatformClient : IOpenPlatformClient
         });
     }
 
-    public Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformGroupDto>>> GetGroupListAsync(CancellationToken cancellationToken)
+    public Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDto>>> GetRegionListAsync(
+        string regionId,
+        CancellationToken cancellationToken)
     {
-        IReadOnlyList<OpenPlatformGroupDto> payload =
-        [
-            new OpenPlatformGroupDto("group-demo-001", "离线开发分组 A", 2),
-            new OpenPlatformGroupDto("group-demo-002", "离线开发分组 B", 1)
-        ];
+        var payload = string.IsNullOrWhiteSpace(regionId)
+            ? RootRegions
+            : ChildRegions.TryGetValue(regionId, out var regions)
+                ? regions
+                : [];
 
-        return Task.FromResult(new OpenPlatformCallResult<IReadOnlyList<OpenPlatformGroupDto>>
+        return Task.FromResult(new OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDto>>
         {
             Success = true,
-            EndpointName = "getGroupList",
-            RequestUrl = "fake://getGroupList",
+            EndpointName = "getReginWithGroupList",
+            RequestUrl = "fake://getReginWithGroupList",
             Payload = payload
         });
     }
 
-    public Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformDeviceDto>>> GetGroupDeviceListAsync(
-        string groupId,
+    public Task<OpenPlatformCallResult<OpenPlatformRegionDevicePageDto>> GetRegionDevicePageAsync(
+        string regionId,
+        int pageNo,
+        int pageSize,
         CancellationToken cancellationToken)
     {
-        IReadOnlyList<OpenPlatformDeviceDto> payload = groupId switch
-        {
-            "group-demo-001" =>
-            [
-                new OpenPlatformDeviceDto("dev-001", "离线设备 1", groupId, "31.2304", "121.4737", "上海", 1, 1, 1, 0),
-                new OpenPlatformDeviceDto("dev-002", "离线设备 2", groupId, null, null, "未定位", 0, 1, 0, 0)
-            ],
-            _ =>
-            [
-                new OpenPlatformDeviceDto("dev-003", "离线设备 3", groupId, "39.9042", "116.4074", "北京", 1, 1, 1, 0)
-            ]
-        };
+        var allDevices = DevicesByRegion.TryGetValue(regionId, out var devices)
+            ? devices
+            : [];
+        var boundedPageSize = Math.Clamp(pageSize, 1, 50);
+        var items = allDevices
+            .Skip(Math.Max(pageNo - 1, 0) * boundedPageSize)
+            .Take(boundedPageSize)
+            .ToArray();
 
-        return Task.FromResult(new OpenPlatformCallResult<IReadOnlyList<OpenPlatformDeviceDto>>
+        return Task.FromResult(new OpenPlatformCallResult<OpenPlatformRegionDevicePageDto>
         {
             Success = true,
-            EndpointName = "getGroupDeviceList",
-            RequestUrl = "fake://getGroupDeviceList",
+            EndpointName = "getDeviceList",
+            RequestUrl = "fake://getDeviceList",
+            Payload = new OpenPlatformRegionDevicePageDto(
+                items,
+                pageNo,
+                boundedPageSize,
+                allDevices.Count)
+        });
+    }
+
+    public Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDeviceCountDto>>> GetRegionDeviceCountsAsync(
+        string regionCode,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<OpenPlatformRegionDeviceCountDto> payload = string.IsNullOrWhiteSpace(regionCode)
+            ? RootCounts
+            : RootCounts.Where(item => string.Equals(item.RegionCode, regionCode, StringComparison.OrdinalIgnoreCase)).ToArray();
+
+        return Task.FromResult(new OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDeviceCountDto>>
+        {
+            Success = true,
+            EndpointName = "getCusDeviceCount",
+            RequestUrl = "fake://getCusDeviceCount",
             Payload = payload
         });
     }

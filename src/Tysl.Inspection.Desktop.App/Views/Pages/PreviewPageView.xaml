@@ -18,11 +18,11 @@
                 <TextBlock FontSize="24"
                            FontWeight="SemiBold"
                            Foreground="White"
-                           Text="单点预览、异常复检与真实目录" />
+                           Text="真实监控目录树、单点预览与异常复检" />
                 <TextBlock Margin="0,8,0,0"
                            Foreground="#F3F4F6"
                            TextWrapping="Wrap"
-                           Text="继续复用现有单点巡检链路，并在同一页内明确展示本地 SQLite 已落地的全部目录、设备总数和分组明细，便于人工核对是否完整。" />
+                           Text="继续复用现有单点巡检链路，并在同一页内明确展示本地 SQLite 已落地的真实监控目录树、目录层级设备和最小对账结果，便于人工核对是否完整。" />
                 <TextBlock Margin="0,8,0,0"
                            Foreground="#DDE7F2"
                            TextWrapping="Wrap"
@@ -51,7 +51,7 @@
                     <TextBlock FontSize="18"
                                FontWeight="SemiBold"
                                Foreground="{DynamicResource PrimaryTextBrush}"
-                               Text="真实设备目录与点位" />
+                               Text="真实监控目录树与所有点位设备" />
                     <TextBlock Margin="0,8,0,0"
                                Foreground="{DynamicResource SecondaryTextBrush}"
                                TextWrapping="Wrap"
@@ -132,12 +132,11 @@
                                 BorderThickness="1"
                                 CornerRadius="14">
                             <StackPanel>
-                                <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="平台分组汇总" />
+                                <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="平台拉回" />
                                 <TextBlock Margin="0,6,0,0"
-                                           FontSize="22"
-                                           FontWeight="SemiBold"
                                            Foreground="{DynamicResource PrimaryTextBrush}"
-                                           Text="{Binding DirectoryReportedDeviceCount}" />
+                                           TextWrapping="Wrap"
+                                           Text="{Binding DirectoryPlatformSummaryText}" />
                             </StackPanel>
                         </Border>
                     </Grid>
@@ -169,7 +168,13 @@
                                                                Text="{Binding DisplayText}" />
                                                     <TextBlock Margin="0,4,0,0"
                                                                Foreground="{DynamicResource SecondaryTextBrush}"
+                                                               Text="{Binding HierarchyText}" />
+                                                    <TextBlock Margin="0,4,0,0"
+                                                               Foreground="{DynamicResource SecondaryTextBrush}"
                                                                Text="{Binding DeviceCountSummaryText}" />
+                                                    <TextBlock Margin="0,4,0,0"
+                                                               Foreground="{DynamicResource SecondaryTextBrush}"
+                                                               Text="{Binding ChildrenHintText}" />
                                                 </StackPanel>
                                             </Expander.Header>
                                             <StackPanel>

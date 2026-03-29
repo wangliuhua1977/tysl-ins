@@ -16,6 +16,9 @@ namespace Tysl.Inspection.Desktop.Infrastructure.OpenPlatform;
 
 public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
 {
+    private const string RegionListPath = "/open/token/device/getReginWithGroupList";
+    private const string RegionDeviceListPath = "/open/token/device/getDeviceList";
+    private const string RegionDeviceCountPath = "/open/token/vcpTree/getCusDeviceCount";
     private const string DeviceStatusPath = "/open/token/vpaas/device/getDeviceStatus";
     private const string DevicePreviewPath = "/open/token/cloud/getDeviceMediaUrlRtsp";
 
@@ -61,56 +64,79 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
         return EnsureAccessTokenAsync(cancellationToken);
     }
 
-    public async Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformGroupDto>>> GetGroupListAsync(CancellationToken cancellationToken)
-    {
-        var accessTokenResult = await EnsureAccessTokenAsync(cancellationToken);
-        if (!accessTokenResult.Success || accessTokenResult.Payload is null)
-        {
-            return Fail<IReadOnlyList<OpenPlatformGroupDto>>(
-                "getGroupList",
-                BuildUrl("/open/token/vcpGroup/getGroupList"),
-                accessTokenResult.BuildMessage());
-        }
-
-        var requestParameters = new List<KeyValuePair<string, string?>>
-        {
-            new("accessToken", accessTokenResult.Payload.AccessToken),
-            new("enterpriseUser", options.EnterpriseUser)
-        };
-
-        return await SendAsync(
-            endpointName: "getGroupList",
-            path: "/open/token/vcpGroup/getGroupList",
-            privateParameters: requestParameters,
-            parsePayload: ParseGroupList,
-            cancellationToken: cancellationToken);
-    }
-
-    public async Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformDeviceDto>>> GetGroupDeviceListAsync(
-        string groupId,
+    public async Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDto>>> GetRegionListAsync(
+        string regionId,
         CancellationToken cancellationToken)
     {
         var accessTokenResult = await EnsureAccessTokenAsync(cancellationToken);
         if (!accessTokenResult.Success || accessTokenResult.Payload is null)
         {
-            return Fail<IReadOnlyList<OpenPlatformDeviceDto>>(
-                "getGroupDeviceList",
-                BuildUrl("/open/token/vcpGroup/getGroupDeviceList"),
+            return Fail<IReadOnlyList<OpenPlatformRegionDto>>(
+                "getReginWithGroupList",
+                BuildUrl(RegionListPath),
                 accessTokenResult.BuildMessage());
         }
 
-        var requestParameters = new List<KeyValuePair<string, string?>>
-        {
-            new("accessToken", accessTokenResult.Payload.AccessToken),
-            new("enterpriseUser", options.EnterpriseUser),
-            new("groupId", groupId)
-        };
+        var requestParameters = CreateAuthorizedParameters(accessTokenResult.Payload.AccessToken);
+        requestParameters.Add(new("regionId", regionId));
 
         return await SendAsync(
-            endpointName: "getGroupDeviceList",
-            path: "/open/token/vcpGroup/getGroupDeviceList",
+            endpointName: "getReginWithGroupList",
+            path: RegionListPath,
             privateParameters: requestParameters,
-            parsePayload: root => ParseGroupDeviceList(root, groupId),
+            parsePayload: ParseRegionList,
+            cancellationToken: cancellationToken);
+    }
+
+    public async Task<OpenPlatformCallResult<OpenPlatformRegionDevicePageDto>> GetRegionDevicePageAsync(
+        string regionId,
+        int pageNo,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        var accessTokenResult = await EnsureAccessTokenAsync(cancellationToken);
+        if (!accessTokenResult.Success || accessTokenResult.Payload is null)
+        {
+            return Fail<OpenPlatformRegionDevicePageDto>(
+                "getDeviceList",
+                BuildUrl(RegionDeviceListPath),
+                accessTokenResult.BuildMessage());
+        }
+
+        var requestParameters = CreateAuthorizedParameters(accessTokenResult.Payload.AccessToken);
+        requestParameters.Add(new("regionId", regionId));
+        requestParameters.Add(new("pageNo", pageNo.ToString(CultureInfo.InvariantCulture)));
+        requestParameters.Add(new("pageSize", Math.Clamp(pageSize, 1, 50).ToString(CultureInfo.InvariantCulture)));
+
+        return await SendAsync(
+            endpointName: "getDeviceList",
+            path: RegionDeviceListPath,
+            privateParameters: requestParameters,
+            parsePayload: ParseRegionDevicePage,
+            cancellationToken: cancellationToken);
+    }
+
+    public async Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDeviceCountDto>>> GetRegionDeviceCountsAsync(
+        string regionCode,
+        CancellationToken cancellationToken)
+    {
+        var accessTokenResult = await EnsureAccessTokenAsync(cancellationToken);
+        if (!accessTokenResult.Success || accessTokenResult.Payload is null)
+        {
+            return Fail<IReadOnlyList<OpenPlatformRegionDeviceCountDto>>(
+                "getCusDeviceCount",
+                BuildUrl(RegionDeviceCountPath),
+                accessTokenResult.BuildMessage());
+        }
+
+        var requestParameters = CreateAuthorizedParameters(accessTokenResult.Payload.AccessToken);
+        requestParameters.Add(new("regionCode", regionCode));
+
+        return await SendAsync(
+            endpointName: "getCusDeviceCount",
+            path: RegionDeviceCountPath,
+            privateParameters: requestParameters,
+            parsePayload: ParseRegionDeviceCounts,
             cancellationToken: cancellationToken);
     }
 
@@ -127,12 +153,8 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
                 $"accessToken 获取失败：{accessTokenResult.BuildMessage()}");
         }
 
-        var requestParameters = new List<KeyValuePair<string, string?>>
-        {
-            new("accessToken", accessTokenResult.Payload.AccessToken),
-            new("enterpriseUser", options.EnterpriseUser),
-            new("deviceCode", deviceCode)
-        };
+        var requestParameters = CreateAuthorizedParameters(accessTokenResult.Payload.AccessToken);
+        requestParameters.Add(new("deviceCode", deviceCode));
 
         return await SendAsync(
             endpointName: "getDeviceStatus",
@@ -155,12 +177,8 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
                 $"accessToken 获取失败：{accessTokenResult.BuildMessage()}");
         }
 
-        var requestParameters = new List<KeyValuePair<string, string?>>
-        {
-            new("accessToken", accessTokenResult.Payload.AccessToken),
-            new("enterpriseUser", options.EnterpriseUser),
-            new("deviceCode", deviceCode)
-        };
+        var requestParameters = CreateAuthorizedParameters(accessTokenResult.Payload.AccessToken);
+        requestParameters.Add(new("deviceCode", deviceCode));
 
         return await SendAsync(
             endpointName: "getDeviceMediaUrlRtsp",
@@ -279,7 +297,7 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
         var plainParams = string.Join(
             "&",
             privateParameters
-                .Where(pair => !string.IsNullOrWhiteSpace(pair.Value))
+                .Where(pair => pair.Value is not null)
                 .Select(pair => $"{pair.Key}={pair.Value}"));
 
         var encryptedParams = XxTea.EncryptToHex(plainParams, options.AppSecret);
@@ -428,12 +446,14 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
         if (payloadElement.ValueKind == JsonValueKind.String)
         {
             var dataText = payloadElement.GetString() ?? string.Empty;
-            var decrypted = TryDecryptResponseData(dataText);
-            if (!string.IsNullOrWhiteSpace(decrypted))
+            if (string.IsNullOrWhiteSpace(dataText))
             {
-                using var decryptedDocument = JsonDocument.Parse(decrypted);
-                return decryptedDocument.RootElement.Clone();
+                return payloadElement.Clone();
             }
+
+            var decrypted = DecryptResponseDataStrict(dataText);
+            using var decryptedDocument = JsonDocument.Parse(decrypted);
+            return decryptedDocument.RootElement.Clone();
         }
 
         return payloadElement.Clone();
@@ -501,28 +521,6 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
         }
     }
 
-    private string TryDecryptResponseData(string encryptedPayload)
-    {
-        if (string.IsNullOrWhiteSpace(encryptedPayload))
-        {
-            return encryptedPayload;
-        }
-
-        if (encryptedPayload.StartsWith("{", StringComparison.Ordinal) || encryptedPayload.StartsWith("[", StringComparison.Ordinal))
-        {
-            return encryptedPayload;
-        }
-
-        try
-        {
-            return DecryptResponseDataStrict(encryptedPayload);
-        }
-        catch
-        {
-            return encryptedPayload;
-        }
-    }
-
     private string DecryptResponseDataStrict(string encryptedPayload)
     {
         if (string.IsNullOrWhiteSpace(options.Version))
@@ -576,6 +574,22 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
         using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret));
         var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(source));
         return Convert.ToHexString(hash);
+    }
+
+    private List<KeyValuePair<string, string?>> CreateAuthorizedParameters(string accessToken)
+    {
+        var parameters = new List<KeyValuePair<string, string?>>
+        {
+            new("accessToken", accessToken),
+            new("enterpriseUser", options.EnterpriseUser)
+        };
+
+        if (!string.IsNullOrWhiteSpace(options.ParentUser))
+        {
+            parameters.Add(new("parentUser", options.ParentUser));
+        }
+
+        return parameters;
     }
 
     private string BuildUrl(string path)
@@ -746,19 +760,39 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
         return new OpenPlatformDeviceStatusPayload(deviceCode, onlineStatus);
     }
 
-    private static IReadOnlyList<OpenPlatformGroupDto> ParseGroupList(JsonElement root)
+    private static IReadOnlyList<OpenPlatformRegionDto> ParseRegionList(JsonElement root)
     {
-        var arrayElement = ExtractSingleArrayPayload(root, "getGroupList");
-        return JsonSerializer.Deserialize<List<OpenPlatformGroupDto>>(arrayElement.GetRawText(), JsonSerializerOptions) ?? [];
+        var arrayElement = ExtractSingleArrayPayload(root, "getReginWithGroupList");
+        return JsonSerializer.Deserialize<List<OpenPlatformRegionDto>>(arrayElement.GetRawText(), JsonSerializerOptions) ?? [];
     }
 
-    private static IReadOnlyList<OpenPlatformDeviceDto> ParseGroupDeviceList(JsonElement root, string groupId)
+    private static OpenPlatformRegionDevicePageDto ParseRegionDevicePage(JsonElement root)
     {
-        var arrayElement = ExtractSingleArrayPayload(root, "getGroupDeviceList");
-        var devices = JsonSerializer.Deserialize<List<OpenPlatformDeviceDto>>(arrayElement.GetRawText(), JsonSerializerOptions) ?? [];
-        return devices
-            .Select(device => device with { GroupId = string.IsNullOrWhiteSpace(device.GroupId) ? groupId : device.GroupId })
-            .ToArray();
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException("getDeviceList 返回结构不是分页对象；文档未说明，需人工确认。");
+        }
+
+        if (!root.TryGetProperty("list", out var listElement) || listElement.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException("getDeviceList 返回结构缺少 list 数组；文档未说明，需人工确认。");
+        }
+
+        var items = JsonSerializer.Deserialize<List<OpenPlatformRegionDeviceDto>>(listElement.GetRawText(), JsonSerializerOptions) ?? [];
+        var pageNo = GetInt32(root, "pageNo")
+            ?? throw new InvalidOperationException("getDeviceList 返回结构缺少 pageNo；文档未说明，需人工确认。");
+        var pageSize = GetInt32(root, "pageSize")
+            ?? throw new InvalidOperationException("getDeviceList 返回结构缺少 pageSize；文档未说明，需人工确认。");
+        var totalCount = GetInt32(root, "totalCount")
+            ?? throw new InvalidOperationException("getDeviceList 返回结构缺少 totalCount；文档未说明，需人工确认。");
+
+        return new OpenPlatformRegionDevicePageDto(items, pageNo, pageSize, totalCount);
+    }
+
+    private static IReadOnlyList<OpenPlatformRegionDeviceCountDto> ParseRegionDeviceCounts(JsonElement root)
+    {
+        var arrayElement = ExtractSingleArrayPayload(root, "getCusDeviceCount");
+        return JsonSerializer.Deserialize<List<OpenPlatformRegionDeviceCountDto>>(arrayElement.GetRawText(), JsonSerializerOptions) ?? [];
     }
 
     private static OpenPlatformPreviewUrlPayload ParsePreviewUrl(JsonElement root)

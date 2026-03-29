@@ -12,22 +12,29 @@ public sealed record OpenPlatformAccessTokenPayload(
     DateTimeOffset ExpiresAt,
     DateTimeOffset RefreshExpiresAt);
 
-public sealed record OpenPlatformGroupDto(
-    [property: JsonConverter(typeof(FlexibleStringJsonConverter))] string GroupId,
-    [property: JsonConverter(typeof(FlexibleStringJsonConverter))] string GroupName,
-    int DeviceCount);
+public sealed record OpenPlatformRegionDto(
+    [property: JsonConverter(typeof(FlexibleStringJsonConverter))] string Id,
+    [property: JsonConverter(typeof(FlexibleStringJsonConverter))] string RegionCode,
+    [property: JsonConverter(typeof(FlexibleNullableIntJsonConverter))] int? HasChildren,
+    [property: JsonConverter(typeof(FlexibleNullableIntJsonConverter))] int? HavDevice,
+    [property: JsonConverter(typeof(FlexibleStringJsonConverter))] string Name,
+    [property: JsonConverter(typeof(FlexibleNullableIntJsonConverter))] int? Level,
+    [property: JsonConverter(typeof(FlexibleStringJsonConverter))] string? RegionGBId);
 
-public sealed record OpenPlatformDeviceDto(
+public sealed record OpenPlatformRegionDeviceDto(
     [property: JsonConverter(typeof(FlexibleStringJsonConverter))] string DeviceCode,
-    [property: JsonConverter(typeof(FlexibleStringJsonConverter))] string DeviceName,
-    [property: JsonConverter(typeof(FlexibleStringJsonConverter))] string GroupId,
-    [property: JsonConverter(typeof(FlexibleStringJsonConverter))] string? Latitude,
-    [property: JsonConverter(typeof(FlexibleStringJsonConverter))] string? Longitude,
-    [property: JsonConverter(typeof(FlexibleStringJsonConverter))] string? Location,
-    [property: JsonConverter(typeof(FlexibleNullableIntJsonConverter))] int? OnlineStatus,
-    [property: JsonConverter(typeof(FlexibleNullableIntJsonConverter))] int? CloudStatus,
-    [property: JsonConverter(typeof(FlexibleNullableIntJsonConverter))] int? BandStatus,
-    [property: JsonConverter(typeof(FlexibleNullableIntJsonConverter))] int? SourceTypeFlag);
+    [property: JsonConverter(typeof(FlexibleStringJsonConverter))] string DeviceName);
+
+public sealed record OpenPlatformRegionDevicePageDto(
+    IReadOnlyList<OpenPlatformRegionDeviceDto> Items,
+    int PageNo,
+    int PageSize,
+    int TotalCount);
+
+public sealed record OpenPlatformRegionDeviceCountDto(
+    [property: JsonConverter(typeof(FlexibleStringJsonConverter))] string RegionCode,
+    [property: JsonConverter(typeof(FlexibleNullableIntJsonConverter))] int? DeviceCount,
+    [property: JsonConverter(typeof(FlexibleNullableIntJsonConverter))] int? OnlineCount);
 
 public sealed record OpenPlatformDeviceStatusPayload(
     string DeviceCode,
@@ -69,10 +76,18 @@ public interface IOpenPlatformClient
 {
     Task<OpenPlatformCallResult<OpenPlatformAccessTokenPayload>> GetAccessTokenAsync(CancellationToken cancellationToken);
 
-    Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformGroupDto>>> GetGroupListAsync(CancellationToken cancellationToken);
+    Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDto>>> GetRegionListAsync(
+        string regionId,
+        CancellationToken cancellationToken);
 
-    Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformDeviceDto>>> GetGroupDeviceListAsync(
-        string groupId,
+    Task<OpenPlatformCallResult<OpenPlatformRegionDevicePageDto>> GetRegionDevicePageAsync(
+        string regionId,
+        int pageNo,
+        int pageSize,
+        CancellationToken cancellationToken);
+
+    Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDeviceCountDto>>> GetRegionDeviceCountsAsync(
+        string regionCode,
         CancellationToken cancellationToken);
 
     Task<OpenPlatformCallResult<OpenPlatformDeviceStatusPayload>> GetDeviceStatusAsync(

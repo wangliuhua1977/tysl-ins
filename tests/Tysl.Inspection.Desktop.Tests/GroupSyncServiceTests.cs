@@ -9,15 +9,15 @@ namespace Tysl.Inspection.Desktop.Tests;
 public sealed class GroupSyncServiceTests
 {
     [Fact]
-    public async Task SyncAsync_ReturnsGroupListFailure_WhenGroupListFails()
+    public async Task SyncAsync_ReturnsRegionListFailure_WhenRootRegionListFails()
     {
         var client = new StubOpenPlatformClient
         {
-            GroupListResult = new OpenPlatformCallResult<IReadOnlyList<OpenPlatformGroupDto>>
+            RootRegionResult = new OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDto>>
             {
                 Success = false,
-                EndpointName = "getGroupList",
-                ErrorMessage = "group list failed"
+                EndpointName = "getReginWithGroupList",
+                ErrorMessage = "region list failed"
             }
         };
         var store = new InMemoryGroupSyncStore();
@@ -25,91 +25,92 @@ public sealed class GroupSyncServiceTests
 
         var summary = await service.SyncAsync(CancellationToken.None);
 
+        Assert.False(summary.SnapshotReplaced);
         Assert.Equal(1, summary.FailureCount);
-        Assert.Equal(GroupSyncFailureKind.GetGroupListFailed, summary.Failures[0].FailureKind);
+        Assert.Equal(GroupSyncFailureKind.GetRegionListFailed, summary.Failures[0].FailureKind);
         Assert.Equal(0, summary.GroupCount);
     }
 
     [Fact]
-    public async Task SyncAsync_KeepsPreviousSnapshot_WhenAnyGroupDeviceListFails()
+    public async Task SyncAsync_KeepsPreviousSnapshot_WhenAnyDirectoryDevicePageFails()
     {
         var client = new StubOpenPlatformClient
         {
-            GroupListResult = new OpenPlatformCallResult<IReadOnlyList<OpenPlatformGroupDto>>
+            RootRegionResult = SuccessResult(
+            [
+                new OpenPlatformRegionDto("r1", "R-001", 0, 1, "目录1", 1, "GB-001")
+            ]),
+            RegionDevicePages =
             {
-                Success = true,
-                EndpointName = "getGroupList",
-                Payload =
-                [
-                    new OpenPlatformGroupDto("g1", "组1", 1),
-                    new OpenPlatformGroupDto("g2", "组2", 1)
-                ]
-            },
-            GroupDeviceResults =
-            {
-                ["g1"] = new OpenPlatformCallResult<IReadOnlyList<OpenPlatformDeviceDto>>
-                {
-                    Success = true,
-                    EndpointName = "getGroupDeviceList",
-                    Payload = [new OpenPlatformDeviceDto("d1", "设备1", "g1", null, null, null, 1, 1, 1, 0)]
-                },
-                ["g2"] = new OpenPlatformCallResult<IReadOnlyList<OpenPlatformDeviceDto>>
+                [BuildPageKey("r1", 1)] = new OpenPlatformCallResult<OpenPlatformRegionDevicePageDto>
                 {
                     Success = false,
-                    EndpointName = "getGroupDeviceList",
-                    ErrorMessage = "device list failed"
+                    EndpointName = "getDeviceList",
+                    ErrorMessage = "page 1 failed"
                 }
             }
         };
         var store = new InMemoryGroupSyncStore();
         await store.ReplaceSnapshotAsync(
-            [new InspectionGroup("seed-group", "旧分组", 1, DateTimeOffset.Parse("2026-03-28T09:00:00+08:00"))],
+            [new InspectionGroup("seed-group", "旧目录", null, "SEED", 1, 1, false, true, null, DateTimeOffset.Parse("2026-03-28T09:00:00+08:00"))],
             [new InspectionDevice("seed-device", "旧设备", "seed-group", null, null, null, 1, 1, 1, 0, DateTimeOffset.Parse("2026-03-28T09:00:00+08:00"))],
+            new GroupSyncSnapshotMetadata(1, 1, true, true, 1, 1, 1, "首层 regionCode：SEED"),
             CancellationToken.None);
         var service = new GroupSyncService(client, store, NullLogger<GroupSyncService>.Instance);
 
         var summary = await service.SyncAsync(CancellationToken.None);
 
+        Assert.False(summary.SnapshotReplaced);
         Assert.Equal(1, summary.GroupCount);
         Assert.Equal(1, summary.DeviceCount);
-        Assert.Equal(1, summary.SuccessCount);
+        Assert.Equal(0, summary.SuccessCount);
         Assert.Equal(1, summary.FailureCount);
-        Assert.Equal(GroupSyncFailureKind.GetGroupDeviceListFailed, summary.Failures[0].FailureKind);
+        Assert.Equal(GroupSyncFailureKind.GetRegionDeviceListFailed, summary.Failures[0].FailureKind);
     }
 
     [Fact]
-    public async Task SyncAsync_ReplacesWholeSnapshot_WhenAllGroupsAndDevicesAreFetched()
+    public async Task SyncAsync_RecursesAllDirectories_PagesAllDevices_AndReconcilesFirstLevelCounts()
     {
         var client = new StubOpenPlatformClient
         {
-            GroupListResult = new OpenPlatformCallResult<IReadOnlyList<OpenPlatformGroupDto>>
+            RootRegionResult = SuccessResult(
+            [
+                new OpenPlatformRegionDto("r1", "R-001", 1, 1, "一级目录A", 1, "GB-001"),
+                new OpenPlatformRegionDto("r2", "R-002", 0, 0, "一级空目录", 1, "GB-002")
+            ]),
+            RegionResults =
+            {
+                ["r1"] = SuccessResult(
+                [
+                    new OpenPlatformRegionDto("r1-1", "R-001-01", 0, 1, "二级目录A-1", 2, "GB-001-01"),
+                    new OpenPlatformRegionDto("r1-2", "R-001-02", 0, 0, "二级空目录A-2", 2, "GB-001-02")
+                ])
+            },
+            RegionDevicePages =
+            {
+                [BuildPageKey("r1", 1)] = SuccessPage(
+                [
+                    new OpenPlatformRegionDeviceDto("d1", "设备1"),
+                    new OpenPlatformRegionDeviceDto("d2", "设备2")
+                ], 1, 2, 3),
+                [BuildPageKey("r1", 2)] = SuccessPage(
+                [
+                    new OpenPlatformRegionDeviceDto("d3", "设备3")
+                ], 2, 2, 3),
+                [BuildPageKey("r1-1", 1)] = SuccessPage(
+                [
+                    new OpenPlatformRegionDeviceDto("d4", "设备4")
+                ], 1, 50, 1)
+            },
+            RegionDeviceCountResult = new OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDeviceCountDto>>
             {
                 Success = true,
-                EndpointName = "getGroupList",
+                EndpointName = "getCusDeviceCount",
                 Payload =
                 [
-                    new OpenPlatformGroupDto("g1", "组1", 2),
-                    new OpenPlatformGroupDto("g2", "组2", 1)
+                    new OpenPlatformRegionDeviceCountDto("R-001", 4, 3),
+                    new OpenPlatformRegionDeviceCountDto("R-002", 0, 0)
                 ]
-            },
-            GroupDeviceResults =
-            {
-                ["g1"] = new OpenPlatformCallResult<IReadOnlyList<OpenPlatformDeviceDto>>
-                {
-                    Success = true,
-                    EndpointName = "getGroupDeviceList",
-                    Payload =
-                    [
-                        new OpenPlatformDeviceDto("d1", "设备1", "g1", "31.23", "121.47", "上海", 1, 1, 1, 0),
-                        new OpenPlatformDeviceDto("d2", "设备2", "g1", null, null, "未定位", 0, 1, 0, 0)
-                    ]
-                },
-                ["g2"] = new OpenPlatformCallResult<IReadOnlyList<OpenPlatformDeviceDto>>
-                {
-                    Success = true,
-                    EndpointName = "getGroupDeviceList",
-                    Payload = [new OpenPlatformDeviceDto("d3", "设备3", "g2", "39.90", "116.40", "北京", 1, 1, 1, 0)]
-                }
             }
         };
         var store = new InMemoryGroupSyncStore();
@@ -119,13 +120,141 @@ public sealed class GroupSyncServiceTests
         var groups = await store.GetGroupsAsync(CancellationToken.None);
         var devices = await store.GetDevicesAsync(CancellationToken.None);
 
-        Assert.Equal(2, summary.GroupCount);
-        Assert.Equal(3, summary.DeviceCount);
-        Assert.Equal(2, summary.SuccessCount);
+        Assert.True(summary.SnapshotReplaced);
+        Assert.Equal(4, summary.GroupCount);
+        Assert.Equal(4, summary.DeviceCount);
+        Assert.Equal(4, summary.SuccessCount);
         Assert.Equal(0, summary.FailureCount);
-        Assert.Equal(2, groups.Count);
-        Assert.Equal(3, devices.Count);
-        Assert.Contains(devices, device => device.DeviceCode == "d2");
+        Assert.True(summary.Metadata.ReconciliationCompleted);
+        Assert.True(summary.Metadata.ReconciliationMatched);
+        Assert.Equal(2, summary.Metadata.ReconciledRegionCount);
+        Assert.Equal(4, summary.Metadata.ReconciledDeviceCount);
+        Assert.Equal(3, summary.Metadata.ReconciledOnlineCount);
+
+        var rootGroup = Assert.Single(groups, group => group.GroupId == "r1");
+        Assert.Equal("R-001", rootGroup.RegionCode);
+        Assert.True(rootGroup.HasChildren);
+        Assert.True(rootGroup.HasDevice);
+        Assert.Equal(3, rootGroup.DeviceCount);
+
+        var childGroup = Assert.Single(groups, group => group.GroupId == "r1-1");
+        Assert.Equal("r1", childGroup.ParentGroupId);
+        Assert.Equal(2, childGroup.Level);
+        Assert.Equal(1, childGroup.DeviceCount);
+
+        var emptyGroup = Assert.Single(groups, group => group.GroupId == "r2");
+        Assert.Equal(0, emptyGroup.DeviceCount);
+        Assert.False(emptyGroup.HasChildren);
+        Assert.False(emptyGroup.HasDevice);
+
+        Assert.Equal(4, devices.Count);
+        Assert.Contains(devices, device => device.DeviceCode == "d4");
+    }
+
+    [Fact]
+    public async Task SyncAsync_UsesReturnedDeviceList_WhenPlatformTotalCountIsLowerThanReturnedItems()
+    {
+        var client = new StubOpenPlatformClient
+        {
+            RootRegionResult = SuccessResult(
+            [
+                new OpenPlatformRegionDto("r1", "R-001", 0, 1, "一级目录A", 1, "GB-001")
+            ]),
+            RegionDevicePages =
+            {
+                [BuildPageKey("r1", 1)] = SuccessPage(
+                [
+                    new OpenPlatformRegionDeviceDto("d1", "设备1"),
+                    new OpenPlatformRegionDeviceDto("d2", "设备2")
+                ], 1, 50, 1)
+            },
+            RegionDeviceCountResult = new OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDeviceCountDto>>
+            {
+                Success = true,
+                EndpointName = "getCusDeviceCount",
+                Payload =
+                [
+                    new OpenPlatformRegionDeviceCountDto("R-001", 2, 1)
+                ]
+            }
+        };
+        var store = new InMemoryGroupSyncStore();
+        var service = new GroupSyncService(client, store, NullLogger<GroupSyncService>.Instance);
+
+        var summary = await service.SyncAsync(CancellationToken.None);
+        var devices = await store.GetDevicesAsync(CancellationToken.None);
+
+        Assert.True(summary.SnapshotReplaced);
+        Assert.Equal(1, summary.GroupCount);
+        Assert.Equal(2, summary.DeviceCount);
+        Assert.Equal(0, summary.FailureCount);
+        Assert.True(summary.Metadata.ReconciliationCompleted);
+        Assert.True(summary.Metadata.ReconciliationMatched);
+        Assert.Equal(2, devices.Count);
+    }
+
+    [Fact]
+    public async Task SyncAsync_ReplacesSnapshot_WhenReconciliationFails_ButMarksMetadataIncomplete()
+    {
+        var client = new StubOpenPlatformClient
+        {
+            RootRegionResult = SuccessResult(
+            [
+                new OpenPlatformRegionDto("r1", "R-001", 0, 1, "一级目录A", 1, "GB-001")
+            ]),
+            RegionDevicePages =
+            {
+                [BuildPageKey("r1", 1)] = SuccessPage(
+                [
+                    new OpenPlatformRegionDeviceDto("d1", "设备1")
+                ], 1, 50, 1)
+            },
+            RegionDeviceCountResult = new OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDeviceCountDto>>
+            {
+                Success = false,
+                EndpointName = "getCusDeviceCount",
+                ErrorMessage = "count failed"
+            }
+        };
+        var store = new InMemoryGroupSyncStore();
+        var service = new GroupSyncService(client, store, NullLogger<GroupSyncService>.Instance);
+
+        var summary = await service.SyncAsync(CancellationToken.None);
+
+        Assert.True(summary.SnapshotReplaced);
+        Assert.Equal(1, summary.GroupCount);
+        Assert.Equal(1, summary.DeviceCount);
+        Assert.Equal(1, summary.FailureCount);
+        Assert.Equal(GroupSyncFailureKind.GetDeviceCountReconciliationFailed, summary.Failures[0].FailureKind);
+        Assert.False(summary.Metadata.ReconciliationCompleted);
+        Assert.Contains("count failed", summary.Metadata.ReconciliationScopeText);
+    }
+
+    private static string BuildPageKey(string regionId, int pageNo) => $"{regionId}::{pageNo}";
+
+    private static OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDto>> SuccessResult(
+        IReadOnlyList<OpenPlatformRegionDto> payload)
+    {
+        return new OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDto>>
+        {
+            Success = true,
+            EndpointName = "getReginWithGroupList",
+            Payload = payload
+        };
+    }
+
+    private static OpenPlatformCallResult<OpenPlatformRegionDevicePageDto> SuccessPage(
+        IReadOnlyList<OpenPlatformRegionDeviceDto> items,
+        int pageNo,
+        int pageSize,
+        int totalCount)
+    {
+        return new OpenPlatformCallResult<OpenPlatformRegionDevicePageDto>
+        {
+            Success = true,
+            EndpointName = "getDeviceList",
+            Payload = new OpenPlatformRegionDevicePageDto(items, pageNo, pageSize, totalCount)
+        };
     }
 
     private sealed class StubOpenPlatformClient : IOpenPlatformClient
@@ -144,29 +273,47 @@ public sealed class GroupSyncServiceTests
                     DateTimeOffset.UtcNow.AddDays(30))
             };
 
-        public OpenPlatformCallResult<IReadOnlyList<OpenPlatformGroupDto>> GroupListResult { get; set; } =
+        public OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDto>> RootRegionResult { get; set; } =
+            SuccessResult([]);
+
+        public Dictionary<string, OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDto>>> RegionResults { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public Dictionary<string, OpenPlatformCallResult<OpenPlatformRegionDevicePageDto>> RegionDevicePages { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDeviceCountDto>> RegionDeviceCountResult { get; set; } =
             new()
             {
                 Success = true,
-                EndpointName = "getGroupList",
+                EndpointName = "getCusDeviceCount",
                 Payload = []
             };
-
-        public Dictionary<string, OpenPlatformCallResult<IReadOnlyList<OpenPlatformDeviceDto>>> GroupDeviceResults { get; } = new();
 
         public Task<OpenPlatformCallResult<OpenPlatformAccessTokenPayload>> GetAccessTokenAsync(CancellationToken cancellationToken)
         {
             return Task.FromResult(AccessTokenResult);
         }
 
-        public Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformGroupDto>>> GetGroupListAsync(CancellationToken cancellationToken)
+        public Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDto>>> GetRegionListAsync(string regionId, CancellationToken cancellationToken)
         {
-            return Task.FromResult(GroupListResult);
+            return Task.FromResult(string.IsNullOrWhiteSpace(regionId)
+                ? RootRegionResult
+                : RegionResults[regionId]);
         }
 
-        public Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformDeviceDto>>> GetGroupDeviceListAsync(string groupId, CancellationToken cancellationToken)
+        public Task<OpenPlatformCallResult<OpenPlatformRegionDevicePageDto>> GetRegionDevicePageAsync(
+            string regionId,
+            int pageNo,
+            int pageSize,
+            CancellationToken cancellationToken)
         {
-            return Task.FromResult(GroupDeviceResults[groupId]);
+            return Task.FromResult(RegionDevicePages[BuildPageKey(regionId, pageNo)]);
+        }
+
+        public Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDeviceCountDto>>> GetRegionDeviceCountsAsync(
+            string regionCode,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult(RegionDeviceCountResult);
         }
 
         public Task<OpenPlatformCallResult<OpenPlatformDeviceStatusPayload>> GetDeviceStatusAsync(string deviceCode, CancellationToken cancellationToken)
@@ -193,7 +340,8 @@ public sealed class GroupSyncServiceTests
     private sealed class InMemoryGroupSyncStore : IGroupSyncStore
     {
         private readonly List<InspectionGroup> groups = [];
-        private readonly Dictionary<string, List<InspectionDevice>> devicesByGroup = [];
+        private readonly List<InspectionDevice> devices = [];
+        private GroupSyncSnapshotMetadata metadata = GroupSyncSnapshotMetadata.Empty;
 
         public Task ReplaceGroupsAsync(IReadOnlyCollection<InspectionGroup> groups, CancellationToken cancellationToken)
         {
@@ -205,52 +353,43 @@ public sealed class GroupSyncServiceTests
         public Task ReplaceSnapshotAsync(
             IReadOnlyCollection<InspectionGroup> groups,
             IReadOnlyCollection<InspectionDevice> devices,
+            GroupSyncSnapshotMetadata metadata,
             CancellationToken cancellationToken)
         {
             this.groups.Clear();
             this.groups.AddRange(groups);
-            devicesByGroup.Clear();
-
-            foreach (var group in groups)
-            {
-                devicesByGroup[group.GroupId] = devices
-                    .Where(device => string.Equals(device.GroupId, group.GroupId, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-            }
-
+            this.devices.Clear();
+            this.devices.AddRange(devices);
+            this.metadata = metadata;
             return Task.CompletedTask;
         }
 
         public Task DeleteOrphanDevicesAsync(CancellationToken cancellationToken)
         {
             var validGroups = groups.Select(group => group.GroupId).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (var orphan in devicesByGroup.Keys.Where(key => !validGroups.Contains(key)).ToArray())
-            {
-                devicesByGroup.Remove(orphan);
-            }
-
+            devices.RemoveAll(device => !validGroups.Contains(device.GroupId));
             return Task.CompletedTask;
         }
 
         public Task ReplaceDevicesForGroupAsync(string groupId, IReadOnlyCollection<InspectionDevice> devices, CancellationToken cancellationToken)
         {
-            devicesByGroup[groupId] = devices.ToList();
+            this.devices.RemoveAll(device => string.Equals(device.GroupId, groupId, StringComparison.OrdinalIgnoreCase));
+            this.devices.AddRange(devices);
             return Task.CompletedTask;
         }
 
         public Task<OverviewStats> GetOverviewStatsAsync(CancellationToken cancellationToken)
         {
-            var allDevices = devicesByGroup.Values.SelectMany(list => list).ToArray();
             var lastSyncedAt = groups.Select(group => group.SyncedAt)
-                .Concat(allDevices.Select(device => device.SyncedAt))
+                .Concat(devices.Select(device => device.SyncedAt))
                 .DefaultIfEmpty()
                 .Max();
 
             return Task.FromResult(new OverviewStats(
-                allDevices.Length,
-                allDevices.Count(device => device.OnlineStatus == 1),
-                allDevices.Count(device => device.OnlineStatus == 0),
-                allDevices.Count(device => string.IsNullOrWhiteSpace(device.Latitude) || string.IsNullOrWhiteSpace(device.Longitude)),
+                devices.Count,
+                devices.Count(device => device.OnlineStatus == 1),
+                devices.Count(device => device.OnlineStatus == 0),
+                devices.Count(device => string.IsNullOrWhiteSpace(device.Latitude) || string.IsNullOrWhiteSpace(device.Longitude)),
                 lastSyncedAt == default ? null : lastSyncedAt));
         }
 
@@ -261,21 +400,21 @@ public sealed class GroupSyncServiceTests
 
         public Task<IReadOnlyList<InspectionDevice>> GetDevicesAsync(CancellationToken cancellationToken)
         {
-            return Task.FromResult<IReadOnlyList<InspectionDevice>>(devicesByGroup.Values.SelectMany(list => list).ToArray());
+            return Task.FromResult<IReadOnlyList<InspectionDevice>>(devices.ToArray());
         }
 
         public Task<LocalSyncSnapshot> GetLocalSyncSnapshotAsync(CancellationToken cancellationToken)
         {
-            var allDevices = devicesByGroup.Values.SelectMany(list => list).ToArray();
             var lastSyncedAt = groups.Select(group => group.SyncedAt)
-                .Concat(allDevices.Select(device => device.SyncedAt))
+                .Concat(devices.Select(device => device.SyncedAt))
                 .DefaultIfEmpty()
                 .Max();
 
             return Task.FromResult(new LocalSyncSnapshot(
                 groups.Count,
-                allDevices.Length,
-                lastSyncedAt == default ? null : lastSyncedAt));
+                devices.Count,
+                lastSyncedAt == default ? null : lastSyncedAt,
+                metadata));
         }
     }
 }

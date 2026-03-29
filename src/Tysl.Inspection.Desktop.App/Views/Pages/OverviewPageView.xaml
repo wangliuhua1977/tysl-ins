@@ -9,7 +9,7 @@
                        Text="运行总览" />
             <TextBlock Margin="0,8,0,0"
                        Foreground="{DynamicResource SecondaryTextBrush}"
-                       Text="统计来自本地 SQLite，不直接实时查询平台。" />
+                       Text="统计来自本地 SQLite，不直接实时查询平台；点位总数与监控目录树快照保持同口径。" />
 
             <primitives:UniformGrid Margin="0,24,0,0"
                                     Columns="2"

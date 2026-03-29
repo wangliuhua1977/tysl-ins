@@ -161,39 +161,71 @@ public sealed class OpenPlatformClientTests
     }
 
     [Fact]
-    public async Task GetGroupListAsync_ParsesAllGroups_WhenPayloadIsWrappedBySingleArrayObject()
+    public async Task GetRegionListAsync_DecryptsRsaPayload_WhenDataIsEncryptedString()
     {
+        using var rsa = RSA.Create(2048);
+        var payloadJson = """[{"id":"r1","regionCode":"R-001","hasChildren":1,"havDevice":1,"name":"一级目录A","level":1,"regionGBId":"GB-001"}]""";
+        var encryptedPayload = EncryptToBase64(rsa, payloadJson);
         using var client = CreateClient(
-            CreatePrivateKeyPem(),
+            rsa.ExportRSAPrivateKeyPem(),
             CreateHandler(
                 CreateJsonResponse("""{"code":0,"msg":"成功","data":{"accessToken":"token","refreshToken":"refresh","expiresIn":3600}}"""),
-                CreateJsonResponse("""{"code":0,"msg":"成功","data":{"total":2,"records":[{"groupId":"g1","groupName":"组1","deviceCount":2},{"groupId":"g2","groupName":"组2","deviceCount":1}]}}""")));
+                CreateJsonResponse($$"""{"code":0,"msg":"成功","data":"{{encryptedPayload}}"}""")));
 
-        var result = await client.GetGroupListAsync(CancellationToken.None);
+        var result = await client.GetRegionListAsync(string.Empty, CancellationToken.None);
 
         Assert.True(result.Success);
         Assert.NotNull(result.Payload);
-        Assert.Equal(2, result.Payload!.Count);
-        Assert.Equal("g1", result.Payload[0].GroupId);
-        Assert.Equal("g2", result.Payload[1].GroupId);
+        var region = Assert.Single(result.Payload!);
+        Assert.Equal("r1", region.Id);
+        Assert.Equal("R-001", region.RegionCode);
+        Assert.Equal(1, region.HasChildren);
+        Assert.Equal(1, region.HavDevice);
     }
 
     [Fact]
-    public async Task GetGroupDeviceListAsync_ParsesAllDevices_WhenPayloadIsWrappedBySingleArrayObject()
+    public async Task GetRegionDevicePageAsync_ParsesPagedDevices_WhenPayloadIsEncryptedString()
     {
+        using var rsa = RSA.Create(2048);
+        var payloadJson = """{"list":[{"deviceCode":"d1","deviceName":"设备1"},{"deviceCode":"d2","deviceName":"设备2"}],"pageNo":1,"pageSize":2,"totalCount":3}""";
+        var encryptedPayload = EncryptToBase64(rsa, payloadJson);
         using var client = CreateClient(
-            CreatePrivateKeyPem(),
+            rsa.ExportRSAPrivateKeyPem(),
             CreateHandler(
                 CreateJsonResponse("""{"code":0,"msg":"成功","data":{"accessToken":"token","refreshToken":"refresh","expiresIn":3600}}"""),
-                CreateJsonResponse("""{"code":0,"msg":"成功","data":{"total":2,"items":[{"deviceCode":"d1","deviceName":"设备1","groupId":"","latitude":"31.23","longitude":"121.47","location":"上海","onlineStatus":1,"cloudStatus":1,"bandStatus":1,"sourceTypeFlag":0},{"deviceCode":"d2","deviceName":"设备2","groupId":"g1","latitude":"","longitude":"","location":"未定位","onlineStatus":0,"cloudStatus":1,"bandStatus":0,"sourceTypeFlag":0}]}}""")));
+                CreateJsonResponse($$"""{"code":0,"msg":"成功","data":"{{encryptedPayload}}"}""")));
 
-        var result = await client.GetGroupDeviceListAsync("g1", CancellationToken.None);
+        var result = await client.GetRegionDevicePageAsync("r1", 1, 50, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Payload);
+        Assert.Equal(2, result.Payload!.Items.Count);
+        Assert.Equal(1, result.Payload.PageNo);
+        Assert.Equal(2, result.Payload.PageSize);
+        Assert.Equal(3, result.Payload.TotalCount);
+        Assert.Equal("d2", result.Payload.Items[1].DeviceCode);
+    }
+
+    [Fact]
+    public async Task GetRegionDeviceCountsAsync_ParsesCountList_WhenPayloadIsEncryptedString()
+    {
+        using var rsa = RSA.Create(2048);
+        var payloadJson = """[{"regionCode":"R-001","deviceCount":4,"onlineCount":3},{"regionCode":"R-002","deviceCount":0,"onlineCount":0}]""";
+        var encryptedPayload = EncryptToBase64(rsa, payloadJson);
+        using var client = CreateClient(
+            rsa.ExportRSAPrivateKeyPem(),
+            CreateHandler(
+                CreateJsonResponse("""{"code":0,"msg":"成功","data":{"accessToken":"token","refreshToken":"refresh","expiresIn":3600}}"""),
+                CreateJsonResponse($$"""{"code":0,"msg":"成功","data":"{{encryptedPayload}}"}""")));
+
+        var result = await client.GetRegionDeviceCountsAsync(string.Empty, CancellationToken.None);
 
         Assert.True(result.Success);
         Assert.NotNull(result.Payload);
         Assert.Equal(2, result.Payload!.Count);
-        Assert.Equal("g1", result.Payload[0].GroupId);
-        Assert.Equal("d2", result.Payload[1].DeviceCode);
+        Assert.Equal("R-001", result.Payload[0].RegionCode);
+        Assert.Equal(4, result.Payload[0].DeviceCount);
+        Assert.Equal(3, result.Payload[0].OnlineCount);
     }
 
     private static OpenPlatformClient CreateClient(string rsaPrivateKey, HttpMessageHandler handler)
@@ -244,6 +276,12 @@ public sealed class OpenPlatformClientTests
     {
         using var rsa = RSA.Create(2048);
         return rsa.ExportRSAPrivateKeyPem();
+    }
+
+    private static string EncryptToBase64(RSA rsa, string payloadJson)
+    {
+        return Convert.ToBase64String(
+            rsa.Encrypt(Encoding.UTF8.GetBytes(payloadJson), RSAEncryptionPadding.Pkcs1));
     }
 
     private static string EncryptInBlocksToBase64(RSA rsa, string payloadJson)
