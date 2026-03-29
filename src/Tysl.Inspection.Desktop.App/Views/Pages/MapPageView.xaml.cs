@@ -121,8 +121,9 @@ public partial class MapPageView : System.Windows.Controls.UserControl
             {
                 var renderedCount = ReadInt(document.RootElement, "renderedCount");
                 var missingCount = ReadInt(document.RootElement, "missingCount");
+                var rateLimitedCount = ReadInt(document.RootElement, "rateLimitedCount");
                 var failedCount = ReadInt(document.RootElement, "failedCount");
-                viewModel?.ReportCoordinateConversionCompleted(renderedCount, missingCount, failedCount);
+                viewModel?.ReportCoordinateConversionCompleted(renderedCount, missingCount, rateLimitedCount, failedCount);
                 return;
             }
 
@@ -133,6 +134,21 @@ public partial class MapPageView : System.Windows.Controls.UserControl
                     ? messageElement.GetString()
                     : null;
                 viewModel?.ReportCoordinateConversionFailed(failedCount, message ?? "坐标转换失败，需人工确认。");
+                return;
+            }
+
+            if (messageType is "bootstrap-consumed")
+            {
+                var expectedRenderedCount = ReadInt(document.RootElement, "expectedRenderedCount");
+                var actualRenderableCount = ReadInt(document.RootElement, "actualRenderableCount");
+                var invalidMapCoordinateCount = ReadInt(document.RootElement, "invalidMapCoordinateCount");
+
+                if (invalidMapCoordinateCount > 0 || actualRenderableCount != expectedRenderedCount)
+                {
+                    viewModel?.ReportCoordinateConversionFailed(
+                        invalidMapCoordinateCount,
+                        $"地图宿主页未完全消费转换结果：预期 {expectedRenderedCount} 个可上图点位，实际 {actualRenderableCount} 个，非法渲染坐标 {invalidMapCoordinateCount} 个。");
+                }
             }
         }
         catch

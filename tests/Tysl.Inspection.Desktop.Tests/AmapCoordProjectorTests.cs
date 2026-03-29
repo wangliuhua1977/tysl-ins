@@ -103,4 +103,52 @@ public sealed class AmapCoordProjectorTests
         Assert.Contains("回传解析失败", malformed.CoordinateWarning);
         Assert.Contains(payload.Errors, error => string.Equals(error.DeviceCode, "dev-002", StringComparison.OrdinalIgnoreCase));
     }
+
+    [Fact]
+    public void ParseBatchPayload_ReadsPerItemDiagnosticsForStringShapedResult()
+    {
+        const string responseJson = """
+            {
+              "type": "coord-conversion-batch",
+              "protocolVersion": "1.0",
+              "requestedCount": 1,
+              "successCount": 1,
+              "failedCount": 0,
+              "missingCount": 0,
+              "errorCount": 0,
+              "items": [
+                {
+                  "deviceCode": "dev-003",
+                  "rawLatitude": "31.2304",
+                  "rawLongitude": "121.4737",
+                  "hasRawCoordinate": true,
+                  "hasMapCoordinate": true,
+                  "coordinateState": "available",
+                  "coordinateStateText": "已获取并转换坐标",
+                  "coordinateWarning": "地图 marker 仅使用转换后的高德坐标。",
+                  "mapLatitude": "31.224361",
+                  "mapLongitude": "121.469170",
+                  "conversionStatus": "complete",
+                  "conversionInfo": "ok",
+                  "resultLocationKind": "string",
+                  "resultLatitude": "31.224361",
+                  "resultLongitude": "121.469170"
+                }
+              ],
+              "errors": []
+            }
+            """;
+
+        var payload = AmapCoordProjector.ParseBatchPayload(responseJson);
+        var item = Assert.Single(payload.Items);
+
+        Assert.Equal("dev-003", item.DeviceCode);
+        Assert.Equal("31.2304", item.RawLatitude);
+        Assert.Equal("121.4737", item.RawLongitude);
+        Assert.Equal("complete", item.ConversionStatus);
+        Assert.Equal("ok", item.ConversionInfo);
+        Assert.Equal("string", item.ResultLocationKind);
+        Assert.Equal("31.224361", item.ResultLatitude);
+        Assert.Equal("121.469170", item.ResultLongitude);
+    }
 }

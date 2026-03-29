@@ -34,7 +34,7 @@ public sealed class MapService(
             var devicesWithProjectionCache = MergeProjectionCache(resolvedDevices, projections);
             var changedCacheDevices = resolvedDevices
                 .Zip(devicesWithProjectionCache, (original, updated) => (original, updated))
-                .Where(pair => HasProjectionCacheChanged(pair.original, pair.updated))
+                .Where(pair => HasProjectionStateChanged(pair.original, pair.updated))
                 .Select(pair => pair.updated)
                 .ToArray();
 
@@ -46,17 +46,15 @@ public sealed class MapService(
                     changedCacheDevices.Length);
             }
 
-            var renderedCount = projections.Values.Count(result => result.HasMapCoordinate);
-            var missingCount = projections.Values.Count(result => result.CoordinateState == CoordinateStateCatalog.Missing);
-            var rateLimitedCount = projections.Values.Count(result => result.CoordinateState == CoordinateStateCatalog.RateLimited);
-            var failedCount = projections.Values.Count(result => result.CoordinateState == CoordinateStateCatalog.Failed);
+            var stats = MapCoordinateStats.FromDevices(devicesWithProjectionCache);
 
             logger.LogInformation(
-                "Map coordinate load completed. RenderedCount={RenderedCount}, MissingCount={MissingCount}, RateLimitedCount={RateLimitedCount}, FailedCount={FailedCount}.",
-                renderedCount,
-                missingCount,
-                rateLimitedCount,
-                failedCount);
+                "Map coordinate load completed. RenderedCount={RenderedCount}, UnmappedCount={UnmappedCount}, MissingCount={MissingCount}, RateLimitedCount={RateLimitedCount}, FailedCount={FailedCount}.",
+                stats.RenderedCount,
+                stats.UnmappedCount,
+                stats.MissingCount,
+                stats.RateLimitedCount,
+                stats.FailedCount);
 
             return new MapLoadResult(true, string.Empty, devicesWithProjectionCache)
             {
@@ -85,16 +83,20 @@ public sealed class MapService(
                 return device with
                 {
                     MapLatitude = projection.HasMapCoordinate ? projection.MapLatitude : null,
-                    MapLongitude = projection.HasMapCoordinate ? projection.MapLongitude : null
+                    MapLongitude = projection.HasMapCoordinate ? projection.MapLongitude : null,
+                    CoordinateStatus = projection.CoordinateState,
+                    CoordinateStatusMessage = projection.CoordinateWarning
                 };
             })
             .ToArray();
     }
 
-    private static bool HasProjectionCacheChanged(InspectionDevice original, InspectionDevice updated)
+    private static bool HasProjectionStateChanged(InspectionDevice original, InspectionDevice updated)
     {
         return !string.Equals(original.MapLatitude, updated.MapLatitude, StringComparison.Ordinal)
-               || !string.Equals(original.MapLongitude, updated.MapLongitude, StringComparison.Ordinal);
+               || !string.Equals(original.MapLongitude, updated.MapLongitude, StringComparison.Ordinal)
+               || !string.Equals(original.CoordinateStatus, updated.CoordinateStatus, StringComparison.Ordinal)
+               || !string.Equals(original.CoordinateStatusMessage, updated.CoordinateStatusMessage, StringComparison.Ordinal);
     }
 
     private static string BuildSqliteMessage(Exception exception)

@@ -37,7 +37,7 @@ public sealed partial class MapPageViewModel(
     private int offlineCount;
 
     [ObservableProperty]
-    private int unlocatedCount;
+    private int unmappedCount;
 
     [ObservableProperty]
     private string mapBootstrapJson = string.Empty;
@@ -63,6 +63,7 @@ public sealed partial class MapPageViewModel(
         MapBootstrapJson = BuildBootstrapJson(
             Array.Empty<InspectionDevice>(),
             new Dictionary<string, CoordinateProjectionResult>(StringComparer.OrdinalIgnoreCase),
+            MapCoordinateStats.Empty,
             StatusText,
             false,
             false);
@@ -83,14 +84,16 @@ public sealed partial class MapPageViewModel(
             candidateCount);
     }
 
-    public void ReportCoordinateConversionCompleted(int renderedCount, int missingCount, int failedCount)
+    public void ReportCoordinateConversionCompleted(int renderedCount, int missingCount, int rateLimitedCount, int failedCount)
     {
         RenderedCount = renderedCount;
-        UnlocatedCount = missingCount + failedCount;
+        UnmappedCount = missingCount + rateLimitedCount + failedCount;
         logger.LogInformation(
-            "Map coordinate conversion completed. RenderedCount={RenderedCount}, MissingCount={MissingCount}, FailedCount={FailedCount}.",
+            "Map coordinate conversion completed. RenderedCount={RenderedCount}, UnmappedCount={UnmappedCount}, MissingCount={MissingCount}, RateLimitedCount={RateLimitedCount}, FailedCount={FailedCount}.",
             renderedCount,
+            UnmappedCount,
             missingCount,
+            rateLimitedCount,
             failedCount);
     }
 
@@ -107,21 +110,18 @@ public sealed partial class MapPageViewModel(
         var devices = result.Devices;
         var projections = result.ProjectionByDeviceCode;
         var totalCount = devices.Count;
-        var renderedCount = projections.Values.Count(item => item.HasMapCoordinate);
-        var missingCount = projections.Values.Count(item => item.CoordinateState == CoordinateStateCatalog.Missing);
-        var rateLimitedCount = projections.Values.Count(item => item.CoordinateState == CoordinateStateCatalog.RateLimited);
-        var failedCount = projections.Values.Count(item => item.CoordinateState == CoordinateStateCatalog.Failed);
+        var stats = MapCoordinateStats.FromDevices(devices);
 
-        RenderedCount = renderedCount;
+        RenderedCount = stats.RenderedCount;
         OnlineCount = devices.Count(device => device.OnlineStatus == 1);
         OfflineCount = devices.Count(device => device.OnlineStatus == 0);
-        UnlocatedCount = totalCount - renderedCount;
+        UnmappedCount = stats.UnmappedCount;
 
         var hasMapKey = mapOptions.HasJsKey();
         StatusText = result.Success
             ? hasMapKey
                 ? totalCount > 0
-                    ? BuildStatusText(totalCount, renderedCount, missingCount, rateLimitedCount, failedCount)
+                    ? stats.BuildMapStatusText()
                     : "本地 SQLite 中暂无点位数据。"
                 : totalCount > 0
                     ? $"已读取 {totalCount} 个本地点位，但缺少高德地图 Key 配置。"
@@ -129,18 +129,20 @@ public sealed partial class MapPageViewModel(
             : result.Message;
 
         logger.LogInformation(
-            "Map page final render coordinate summary. RenderedCount={RenderedCount}, MissingCount={MissingCount}, RateLimitedCount={RateLimitedCount}, FailedCount={FailedCount}.",
-            renderedCount,
-            missingCount,
-            rateLimitedCount,
-            failedCount);
+            "Map page final render coordinate summary. RenderedCount={RenderedCount}, UnmappedCount={UnmappedCount}, MissingCount={MissingCount}, RateLimitedCount={RateLimitedCount}, FailedCount={FailedCount}.",
+            stats.RenderedCount,
+            stats.UnmappedCount,
+            stats.MissingCount,
+            stats.RateLimitedCount,
+            stats.FailedCount);
 
-        MapBootstrapJson = BuildBootstrapJson(devices, projections, StatusText, hasMapKey, hasMapKey && result.Success);
+        MapBootstrapJson = BuildBootstrapJson(devices, projections, stats, StatusText, hasMapKey, hasMapKey && result.Success);
     }
 
     private string BuildBootstrapJson(
         IReadOnlyList<InspectionDevice> devices,
         IReadOnlyDictionary<string, CoordinateProjectionResult> projections,
+        MapCoordinateStats stats,
         string statusText,
         bool hasMapKey,
         bool shouldLoadMap)
@@ -166,7 +168,11 @@ public sealed partial class MapPageViewModel(
                     renderedCount = RenderedCount,
                     onlineCount = OnlineCount,
                     offlineCount = OfflineCount,
-                    unlocatedCount = UnlocatedCount
+                    unmappedCount = UnmappedCount,
+                    missingCount = stats.MissingCount,
+                    rateLimitedCount = stats.RateLimitedCount,
+                    failedCount = stats.FailedCount,
+                    unmappedSummaryText = stats.BuildUnmappedSummaryText()
                 },
                 points = devices.Select(device => ProjectDevice(device, projections)).ToArray()
             },
@@ -223,21 +229,6 @@ public sealed partial class MapPageViewModel(
             NumberStyles.Float | NumberStyles.AllowThousands,
             CultureInfo.InvariantCulture,
             out coordinate);
-    }
-
-    private static string BuildStatusText(int totalCount, int renderedCount, int missingCount, int rateLimitedCount, int failedCount)
-    {
-        if (failedCount > 0)
-        {
-            return $"已读取 {totalCount} 个本地点位，其中 {renderedCount} 个完成上图，{missingCount} 个平台未提供坐标，{rateLimitedCount} 个坐标获取限频，{failedCount} 个坐标转换失败，需人工确认。";
-        }
-
-        if (rateLimitedCount > 0)
-        {
-            return $"已读取 {totalCount} 个本地点位，其中 {renderedCount} 个完成上图，{missingCount} 个平台未提供坐标，{rateLimitedCount} 个坐标获取限频，稍后重试。";
-        }
-
-        return $"已读取 {totalCount} 个本地点位，其中 {renderedCount} 个完成上图，{missingCount} 个平台未提供坐标。";
     }
 
     private static string GetOnlineStatusText(int? onlineStatus)

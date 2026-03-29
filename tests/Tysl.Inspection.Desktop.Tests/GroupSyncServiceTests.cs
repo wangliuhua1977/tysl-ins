@@ -463,7 +463,7 @@ public sealed class GroupSyncServiceTests
                 devices.Count,
                 devices.Count(device => device.OnlineStatus == 1),
                 devices.Count(device => device.OnlineStatus == 0),
-                devices.Count(device => string.IsNullOrWhiteSpace(device.Latitude) || string.IsNullOrWhiteSpace(device.Longitude)),
+                MapCoordinateStats.FromDevices(devices),
                 lastSyncedAt == default ? null : lastSyncedAt));
         }
 

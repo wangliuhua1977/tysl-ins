@@ -141,21 +141,13 @@ public sealed class SqliteGroupSyncStore(
         await using var connection = CreateConnection();
         await connection.OpenAsync(cancellationToken);
 
-        var totalPoints = await ExecuteScalarIntAsync(connection, "SELECT COUNT(*) FROM Device;", cancellationToken);
-        var onlineCount = await ExecuteScalarIntAsync(connection, "SELECT COUNT(*) FROM Device WHERE onlineStatus = 1;", cancellationToken);
-        var offlineCount = await ExecuteScalarIntAsync(connection, "SELECT COUNT(*) FROM Device WHERE onlineStatus = 0;", cancellationToken);
-        var unlocatedCount = await ExecuteScalarIntAsync(
-            connection,
-            """
-            SELECT COUNT(*)
-            FROM Device
-            WHERE TRIM(IFNULL(rawLatitude, '')) = ''
-               OR TRIM(IFNULL(rawLongitude, '')) = '';
-            """,
-            cancellationToken);
-
+        var devices = (await GetDevicesAsync(cancellationToken)).ToArray();
+        var totalPoints = devices.Length;
+        var onlineCount = devices.Count(device => device.OnlineStatus == 1);
+        var offlineCount = devices.Count(device => device.OnlineStatus == 0);
+        var coordinateStats = MapCoordinateStats.FromDevices(devices);
         var lastSyncedAt = await GetLastSyncedAtAsync(connection, cancellationToken);
-        return new OverviewStats(totalPoints, onlineCount, offlineCount, unlocatedCount, lastSyncedAt);
+        return new OverviewStats(totalPoints, onlineCount, offlineCount, coordinateStats, lastSyncedAt);
     }
 
     public async Task<IReadOnlyList<InspectionGroup>> GetGroupsAsync(CancellationToken cancellationToken)

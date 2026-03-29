@@ -4,5 +4,5 @@ public sealed record OverviewStats(
     int TotalPoints,
     int OnlineCount,
     int OfflineCount,
-    int UnlocatedCount,
+    MapCoordinateStats CoordinateStats,
     DateTimeOffset? LastSyncedAt);

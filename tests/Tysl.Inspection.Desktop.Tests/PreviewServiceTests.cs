@@ -862,7 +862,7 @@ public sealed class PreviewServiceTests
                 Devices.Count,
                 Devices.Count(device => device.OnlineStatus == 1),
                 Devices.Count(device => device.OnlineStatus == 0),
-                Devices.Count(device => string.IsNullOrWhiteSpace(device.Latitude) || string.IsNullOrWhiteSpace(device.Longitude)),
+                MapCoordinateStats.FromDevices(Devices.ToArray()),
                 GetLastSyncedAt()));
         }
 

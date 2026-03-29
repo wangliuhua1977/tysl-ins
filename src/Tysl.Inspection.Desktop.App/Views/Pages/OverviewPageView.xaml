@@ -9,7 +9,7 @@
                        Text="运行总览" />
             <TextBlock Margin="0,8,0,0"
                        Foreground="{DynamicResource SecondaryTextBrush}"
-                       Text="统计来自本地 SQLite，不直接实时查询平台；点位总数与监控目录树快照保持同口径。" />
+                       Text="统计来自本地 SQLite；“未上图”与地图页统一表示当前无法上图的点位，包含平台未提供坐标、坐标获取限频和坐标转换或解析失败。" />
 
             <primitives:UniformGrid Margin="0,24,0,0"
                                     Columns="2"
@@ -53,11 +53,16 @@
                         BorderThickness="1"
                         CornerRadius="18">
                     <StackPanel>
-                        <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="未定位数" />
-                        <TextBlock Margin="0,10,0,0" FontSize="32" FontWeight="SemiBold" Text="{Binding UnlocatedCount}" />
+                        <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="未上图数" />
+                        <TextBlock Margin="0,10,0,0" FontSize="32" FontWeight="SemiBold" Text="{Binding UnmappedCount}" />
                     </StackPanel>
                 </Border>
             </primitives:UniformGrid>
+
+            <TextBlock Margin="0,8,0,0"
+                       Foreground="{DynamicResource SecondaryTextBrush}"
+                       TextWrapping="Wrap"
+                       Text="{Binding UnmappedSummaryText}" />
 
             <Border Margin="0,24,0,0"
                     Padding="18"

@@ -53,6 +53,14 @@ public sealed class AmapCoordProjector(
             conversionCandidates.Add(item);
         }
 
+        if (cachedRenderCount > 0)
+        {
+            logger.LogInformation(
+                "Coordinate render cache hit. CachedRenderCount={CachedRenderCount}, DeviceCodes={DeviceCodes}.",
+                cachedRenderCount,
+                string.Join(", ", items.Where(HasReusableCachedMapCoordinate).Take(5).Select(item => item.DeviceCode)));
+        }
+
         logger.LogInformation(
             "BD-09 to GCJ-02 projection started. TotalCount={TotalCount}, CachedRenderCount={CachedRenderCount}, ConversionCandidateCount={ConversionCandidateCount}.",
             items.Length,
@@ -73,7 +81,7 @@ public sealed class AmapCoordProjector(
             logger.LogWarning("BD-09 to GCJ-02 projection failed because AMap JS key is missing.");
             foreach (var item in conversionCandidates)
             {
-                results[item.DeviceCode] = BuildFailedResult(item, "缺少高德地图 Key，无法执行坐标转换。");
+                results[item.DeviceCode] = BuildFailedResult(item, "缺少高德地图 Key，无法执行坐标转换。", "高德 Key 缺失");
             }
 
             return results;
@@ -113,6 +121,13 @@ public sealed class AmapCoordProjector(
                 "AMap JS projection request dispatched. CandidateCount={CandidateCount}, DeviceCodes={DeviceCodes}.",
                 conversionCandidates.Count,
                 string.Join(", ", conversionCandidates.Take(5).Select(item => item.DeviceCode)));
+            logger.LogInformation(
+                "AMap JS projection input summary. InputSummary={InputSummary}.",
+                string.Join(
+                    " | ",
+                    conversionCandidates
+                        .Take(5)
+                        .Select(item => $"{item.DeviceCode}:{item.RawLatitude ?? "null"},{item.RawLongitude ?? "null"}")));
 
             var responseJson = await ExecuteScriptAsync(script);
             logger.LogInformation(
@@ -145,9 +160,38 @@ public sealed class AmapCoordProjector(
 
             foreach (var item in conversionCandidates)
             {
-                results[item.DeviceCode] = payloadByDeviceCode.TryGetValue(item.DeviceCode, out var payload)
-                    ? ToResult(item, payload)
-                    : BuildFailedResult(item, "坐标转换失败，需人工确认。");
+                CoordinateProjectionResult result;
+                if (payloadByDeviceCode.TryGetValue(item.DeviceCode, out var payload))
+                {
+                    result = ToResult(item, payload);
+                    logger.LogInformation(
+                        "AMap JS projection item processed. DeviceCode={DeviceCode}, InputLatitude={InputLatitude}, InputLongitude={InputLongitude}, HasMapCoordinate={HasMapCoordinate}, CoordinateState={CoordinateState}, StateText={StateText}, Warning={Warning}, JsStatus={JsStatus}, JsInfo={JsInfo}, FailureStage={FailureStage}, FailureReasonCode={FailureReasonCode}, ResultLocationKind={ResultLocationKind}, ResultLatitude={ResultLatitude}, ResultLongitude={ResultLongitude}.",
+                        item.DeviceCode,
+                        payload.RawLatitude ?? item.RawLatitude ?? "null",
+                        payload.RawLongitude ?? item.RawLongitude ?? "null",
+                        result.HasMapCoordinate,
+                        result.CoordinateState,
+                        result.CoordinateStateText,
+                        result.CoordinateWarning,
+                        payload.ConversionStatus ?? string.Empty,
+                        payload.ConversionInfo ?? string.Empty,
+                        payload.FailureStage ?? string.Empty,
+                        payload.FailureReasonCode ?? string.Empty,
+                        payload.ResultLocationKind ?? string.Empty,
+                        payload.ResultLatitude ?? string.Empty,
+                        payload.ResultLongitude ?? string.Empty);
+                }
+                else
+                {
+                    result = BuildFailedResult(item, "地图未收到当前点位的转换结果。", "地图未收到转换结果");
+                    logger.LogWarning(
+                        "AMap JS projection item missing from payload. DeviceCode={DeviceCode}, InputLatitude={InputLatitude}, InputLongitude={InputLongitude}.",
+                        item.DeviceCode,
+                        item.RawLatitude ?? "null",
+                        item.RawLongitude ?? "null");
+                }
+
+                results[item.DeviceCode] = result;
             }
 
             logger.LogInformation(
@@ -163,7 +207,7 @@ public sealed class AmapCoordProjector(
             logger.LogWarning(exception, "BD-09 to GCJ-02 projection failed unexpectedly.");
             foreach (var item in conversionCandidates)
             {
-                results[item.DeviceCode] = BuildFailedResult(item, "坐标转换失败，需人工确认。");
+                results[item.DeviceCode] = BuildFailedResult(item, "坐标转换异常中断，需人工确认。", "坐标转换异常中断");
             }
 
             return results;
@@ -267,16 +311,27 @@ public sealed class AmapCoordProjector(
         return result;
     }
 
-    private static CoordinateProjectionResult ToResult(CoordinateProjectionRequest request, ProjectionPayload payload)
+    private static CoordinateProjectionResult ToResult(
+        CoordinateProjectionRequest request,
+        ProjectionPayload payload)
     {
         if (payload.HasMapCoordinate)
         {
+            if (!TryReadLatitude(payload.MapLatitude, out _)
+                || !TryReadLongitude(payload.MapLongitude, out _))
+            {
+                var warning = BuildInvalidMapCoordinateMessage(payload);
+                return BuildFailedResult(request, warning, "C# 坐标字段非法");
+            }
+
             return new CoordinateProjectionResult(
                 request.DeviceCode,
                 true,
                 true,
                 CoordinateStateCatalog.Available,
-                CoordinateStateCatalog.GetStateText(CoordinateStateCatalog.Available, true),
+                string.IsNullOrWhiteSpace(payload.CoordinateStateText)
+                    ? CoordinateStateCatalog.GetStateText(CoordinateStateCatalog.Available, true)
+                    : payload.CoordinateStateText,
                 string.IsNullOrWhiteSpace(payload.CoordinateWarning)
                     ? CoordinateStateCatalog.GetWarningText(CoordinateStateCatalog.Available, null, true)
                     : payload.CoordinateWarning,
@@ -284,11 +339,32 @@ public sealed class AmapCoordProjector(
                 payload.MapLongitude);
         }
 
+        var state = NormalizeState(payload.CoordinateState);
+        if (state == CoordinateStateCatalog.Missing || state == CoordinateStateCatalog.RateLimited)
+        {
+            return new CoordinateProjectionResult(
+                request.DeviceCode,
+                payload.HasRawCoordinate,
+                false,
+                state,
+                string.IsNullOrWhiteSpace(payload.CoordinateStateText)
+                    ? CoordinateStateCatalog.GetStateText(state, false)
+                    : payload.CoordinateStateText,
+                string.IsNullOrWhiteSpace(payload.CoordinateWarning)
+                    ? CoordinateStateCatalog.GetWarningText(state, null, false)
+                    : payload.CoordinateWarning,
+                null,
+                null);
+        }
+
         return BuildFailedResult(
             request,
             string.IsNullOrWhiteSpace(payload.CoordinateWarning)
-                ? "坐标转换失败，需人工确认。"
-                : payload.CoordinateWarning);
+                ? "坐标转换或解析失败。"
+                : payload.CoordinateWarning,
+            string.IsNullOrWhiteSpace(payload.CoordinateStateText)
+                ? "坐标转换或解析失败"
+                : payload.CoordinateStateText);
     }
 
     internal static ProjectionBatchPayload ParseBatchPayload(string responseJson)
@@ -389,14 +465,17 @@ public sealed class AmapCoordProjector(
             null);
     }
 
-    private static CoordinateProjectionResult BuildFailedResult(CoordinateProjectionRequest request, string warning)
+    private static CoordinateProjectionResult BuildFailedResult(
+        CoordinateProjectionRequest request,
+        string warning,
+        string stateText = "坐标转换或解析失败")
     {
         return new CoordinateProjectionResult(
             request.DeviceCode,
             true,
             false,
             CoordinateStateCatalog.Failed,
-            "坐标转换失败，需人工确认",
+            stateText,
             warning,
             null,
             null);
@@ -428,6 +507,26 @@ public sealed class AmapCoordProjector(
             NumberStyles.Float | NumberStyles.AllowThousands,
             CultureInfo.InvariantCulture,
             out coordinate);
+    }
+
+    private static bool TryReadLatitude(string? value, out double coordinate)
+    {
+        if (!TryReadCoordinate(value, out coordinate))
+        {
+            return false;
+        }
+
+        return coordinate is >= -90 and <= 90;
+    }
+
+    private static bool TryReadLongitude(string? value, out double coordinate)
+    {
+        if (!TryReadCoordinate(value, out coordinate))
+        {
+            return false;
+        }
+
+        return coordinate is >= -180 and <= 180;
     }
 
     private static string NormalizeState(string? state)
@@ -527,6 +626,15 @@ public sealed class AmapCoordProjector(
         var coordinateWarning = ReadString(itemElement, "coordinateWarning");
         var mapLatitude = ReadString(itemElement, "mapLatitude");
         var mapLongitude = ReadString(itemElement, "mapLongitude");
+        var rawLatitude = ReadString(itemElement, "rawLatitude");
+        var rawLongitude = ReadString(itemElement, "rawLongitude");
+        var failureStage = ReadString(itemElement, "failureStage");
+        var failureReasonCode = ReadString(itemElement, "failureReasonCode");
+        var conversionStatus = ReadString(itemElement, "conversionStatus");
+        var conversionInfo = ReadString(itemElement, "conversionInfo");
+        var resultLocationKind = ReadString(itemElement, "resultLocationKind");
+        var resultLongitude = ReadString(itemElement, "resultLongitude");
+        var resultLatitude = ReadString(itemElement, "resultLatitude");
 
         return new ProjectionPayload(
             deviceCode,
@@ -535,8 +643,17 @@ public sealed class AmapCoordProjector(
             string.IsNullOrWhiteSpace(coordinateState) ? CoordinateStateCatalog.Failed : coordinateState,
             coordinateStateText,
             coordinateWarning,
+            rawLatitude,
+            rawLongitude,
             mapLatitude,
-            mapLongitude);
+            mapLongitude,
+            failureStage,
+            failureReasonCode,
+            conversionStatus,
+            conversionInfo,
+            resultLocationKind,
+            resultLongitude,
+            resultLatitude);
     }
 
     private static ProjectionPayload BuildMalformedItem(
@@ -553,10 +670,26 @@ public sealed class AmapCoordProjector(
             true,
             false,
             CoordinateStateCatalog.Failed,
-            "坐标转换失败，需人工确认",
+            "坐标转换回传解析失败",
             message,
             null,
+            null,
+            null,
+            null,
+            "item-parse",
+            "payload_malformed",
+            null,
+            null,
+            null,
+            null,
             null);
+    }
+
+    private static string BuildInvalidMapCoordinateMessage(ProjectionPayload payload)
+    {
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"C# 解析后字段不合法：mapLatitude={payload.MapLatitude ?? "null"}, mapLongitude={payload.MapLongitude ?? "null"}。");
     }
 
     private static string? ReadString(JsonElement element, string propertyName)
@@ -682,6 +815,15 @@ public sealed class AmapCoordProjector(
         string? CoordinateState,
         string? CoordinateStateText,
         string? CoordinateWarning,
+        string? RawLatitude,
+        string? RawLongitude,
         string? MapLatitude,
-        string? MapLongitude);
+        string? MapLongitude,
+        string? FailureStage,
+        string? FailureReasonCode,
+        string? ConversionStatus,
+        string? ConversionInfo,
+        string? ResultLocationKind,
+        string? ResultLongitude,
+        string? ResultLatitude);
 }

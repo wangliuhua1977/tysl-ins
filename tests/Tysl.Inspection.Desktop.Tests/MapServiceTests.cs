@@ -126,8 +126,13 @@ public sealed class MapServiceTests
         Assert.True(result.Success);
         Assert.Equal("31.224361", result.Devices.Single(device => device.DeviceCode == "dev-001").MapLatitude);
         Assert.Null(result.Devices.Single(device => device.DeviceCode == "dev-002").MapLatitude);
-        var saved = Assert.Single(groupStore.UpdatedDevices);
-        Assert.Equal("dev-001", saved.DeviceCode);
+        Assert.Equal(2, groupStore.UpdatedDevices.Count);
+        var savedSuccess = Assert.Single(groupStore.UpdatedDevices, device => device.DeviceCode == "dev-001");
+        var savedFailure = Assert.Single(groupStore.UpdatedDevices, device => device.DeviceCode == "dev-002");
+        Assert.Equal("31.224361", savedSuccess.MapLatitude);
+        Assert.Equal(CoordinateStateCatalog.Available, savedSuccess.CoordinateStatus);
+        Assert.Equal(CoordinateStateCatalog.Failed, savedFailure.CoordinateStatus);
+        Assert.Contains("invalid params", savedFailure.CoordinateStatusMessage);
     }
 
     [Fact]
@@ -199,7 +204,10 @@ public sealed class MapServiceTests
 
         Assert.True(result.Success);
         Assert.All(result.Devices, device => Assert.Null(device.MapLatitude));
-        Assert.Empty(groupStore.UpdatedDevices);
+        var saved = Assert.Single(groupStore.UpdatedDevices);
+        Assert.Null(saved.MapLatitude);
+        Assert.Equal("dev-003", saved.DeviceCode);
+        Assert.Equal(CoordinateStateCatalog.Missing, saved.CoordinateStatus);
     }
 
     private sealed class StubMapStore(IReadOnlyList<InspectionDevice> devices) : IMapStore

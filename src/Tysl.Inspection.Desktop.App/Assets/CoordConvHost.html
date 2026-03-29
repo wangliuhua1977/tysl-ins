@@ -13,6 +13,23 @@
             return Number(value).toFixed(6);
         }
 
+        function toFiniteCoordinate(value) {
+            const number = Number(value);
+            return Number.isFinite(number) ? number : null;
+        }
+
+        function buildResultShape(value) {
+            if (Array.isArray(value)) {
+                return "array";
+            }
+
+            if (value === null || value === undefined) {
+                return "null";
+            }
+
+            return typeof value;
+        }
+
         function buildBatchPayload(items, errors) {
             const safeItems = Array.isArray(items) ? items : [];
             const safeErrors = Array.isArray(errors) ? errors : [];
@@ -37,14 +54,25 @@
             };
         }
 
-        function buildFailedPoint(point, message) {
+        function buildFailedPoint(point, options) {
+            const safeOptions = options || {};
+            const stateText = safeOptions.coordinateStateText || "坐标转换或解析失败";
+            const warning = safeOptions.coordinateWarning || "坐标转换或解析失败。";
+
             return Object.assign({}, point, {
                 coordinateState: "failed",
-                coordinateStateText: "坐标转换失败，需人工确认",
-                coordinateWarning: message || "坐标转换失败，需人工确认。",
+                coordinateStateText: stateText,
+                coordinateWarning: warning,
                 hasMapCoordinate: false,
                 mapLatitude: null,
-                mapLongitude: null
+                mapLongitude: null,
+                failureStage: safeOptions.failureStage || "unknown",
+                failureReasonCode: safeOptions.failureReasonCode || "unknown",
+                conversionStatus: safeOptions.conversionStatus || "",
+                conversionInfo: safeOptions.conversionInfo || "",
+                resultLocationKind: safeOptions.resultLocationKind || "",
+                resultLongitude: safeOptions.resultLongitude ?? null,
+                resultLatitude: safeOptions.resultLatitude ?? null
             });
         }
 
@@ -72,6 +100,31 @@
             });
         }
 
+        function resolveStringLocation(value) {
+            const text = String(value || "").trim();
+            if (!text) {
+                throw new Error("高德坐标转换未返回结果。");
+            }
+
+            const firstPair = text.split(";")[0];
+            const parts = firstPair.split(",");
+            if (parts.length < 2) {
+                throw new Error("高德坐标转换结果无效。");
+            }
+
+            const lng = toFiniteCoordinate(parts[0]);
+            const lat = toFiniteCoordinate(parts[1]);
+            if (lng === null || lat === null) {
+                throw new Error("高德坐标转换结果无效。");
+            }
+
+            return {
+                lng,
+                lat,
+                resultLocationKind: "string"
+            };
+        }
+
         function resolveConvertedLocation(result) {
             const location = Array.isArray(result?.locations)
                 ? result.locations[0]
@@ -79,6 +132,17 @@
 
             if (!location) {
                 throw new Error("高德坐标转换未返回结果。");
+            }
+
+            if (typeof location === "string") {
+                const parsed = resolveStringLocation(location);
+                return {
+                    lng: formatCoordinate(parsed.lng),
+                    lat: formatCoordinate(parsed.lat),
+                    resultLocationKind: parsed.resultLocationKind,
+                    resultLongitude: formatCoordinate(parsed.lng),
+                    resultLatitude: formatCoordinate(parsed.lat)
+                };
             }
 
             const lng = typeof location.getLng === "function"
@@ -98,7 +162,10 @@
 
             return {
                 lng: formatCoordinate(lng),
-                lat: formatCoordinate(lat)
+                lat: formatCoordinate(lat),
+                resultLocationKind: buildResultShape(location),
+                resultLongitude: formatCoordinate(lng),
+                resultLatitude: formatCoordinate(lat)
             };
         }
 
@@ -130,21 +197,63 @@
                     coordinateWarning: "平台未提供坐标，当前不进入上图。",
                     hasMapCoordinate: false,
                     mapLatitude: null,
-                    mapLongitude: null
+                    mapLongitude: null,
+                    failureStage: "",
+                    failureReasonCode: "",
+                    conversionStatus: "",
+                    conversionInfo: "",
+                    resultLocationKind: "",
+                    resultLongitude: null,
+                    resultLatitude: null
                 });
             }
 
             if (!window.AMap || typeof window.AMap.convertFrom !== "function") {
-                return buildFailedPoint(point, "高德地图坐标转换能力不可用，需人工确认。");
+                return buildFailedPoint(point, {
+                    coordinateStateText: "高德脚本未就绪",
+                    coordinateWarning: "高德地图坐标转换能力不可用，需人工确认。",
+                    failureStage: "load-script",
+                    failureReasonCode: "convert_from_unavailable"
+                });
             }
 
             return await new Promise((resolve) => {
-                const lng = Number(point.rawLongitude);
-                const lat = Number(point.rawLatitude);
+                const lng = toFiniteCoordinate(point.rawLongitude);
+                const lat = toFiniteCoordinate(point.rawLatitude);
+                if (lng === null || lat === null) {
+                    resolve(buildFailedPoint(point, {
+                        coordinateStateText: "原始坐标格式非法",
+                        coordinateWarning: `高德 JS 输入坐标不是有效数字：${point.rawLatitude || "null"} / ${point.rawLongitude || "null"}。`,
+                        failureStage: "input-validate",
+                        failureReasonCode: "raw_coordinate_not_numeric"
+                    }));
+                    return;
+                }
+
+                if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+                    resolve(buildFailedPoint(point, {
+                        coordinateStateText: "原始坐标越界",
+                        coordinateWarning: `高德 JS 输入坐标超出范围：${formatCoordinate(lat)} / ${formatCoordinate(lng)}。`,
+                        failureStage: "input-validate",
+                        failureReasonCode: "raw_coordinate_out_of_range"
+                    }));
+                    return;
+                }
 
                 window.AMap.convertFrom([lng, lat], rawCoordinateSystem || "baidu", (status, result) => {
+                    const info = result && typeof result.info === "string"
+                        ? result.info.trim()
+                        : "";
                     if (status !== "complete") {
-                        resolve(buildFailedPoint(point, buildIncompleteReason(status, result)));
+                        resolve(buildFailedPoint(point, {
+                            coordinateStateText: "高德坐标转换返回失败",
+                            coordinateWarning: buildIncompleteReason(status, result),
+                            failureStage: "convert-from",
+                            failureReasonCode: "convert_from_failed",
+                            conversionStatus: String(status || ""),
+                            conversionInfo: info,
+                            resultLocationKind: buildResultShape(result?.locations)
+                        }));
                         return;
                     }
 
@@ -156,14 +265,27 @@
                             coordinateWarning: "地图 marker 仅使用转换后的高德坐标。",
                             hasMapCoordinate: true,
                             mapLatitude: converted.lat,
-                            mapLongitude: converted.lng
+                            mapLongitude: converted.lng,
+                            failureStage: "",
+                            failureReasonCode: "",
+                            conversionStatus: String(status || ""),
+                            conversionInfo: info,
+                            resultLocationKind: converted.resultLocationKind || buildResultShape(result?.locations),
+                            resultLongitude: converted.resultLongitude || converted.lng,
+                            resultLatitude: converted.resultLatitude || converted.lat
                         }));
                     } catch (error) {
-                        resolve(buildFailedPoint(
-                            point,
-                            error && error.message
+                        resolve(buildFailedPoint(point, {
+                            coordinateStateText: "高德回传值非法",
+                            coordinateWarning: error && error.message
                                 ? error.message
-                                : "高德坐标转换结果无效，需人工确认。"));
+                                : "高德坐标转换结果无效，需人工确认。",
+                            failureStage: "result-validate",
+                            failureReasonCode: "js_result_invalid",
+                            conversionStatus: String(status || ""),
+                            conversionInfo: info,
+                            resultLocationKind: buildResultShape(result?.locations)
+                        }));
                     }
                 });
             });
@@ -188,7 +310,12 @@
                         : "高德地图脚本加载失败，请检查 Key 配置或网络连接。";
                     return buildBatchPayload(
                         safePoints.map((point) => point.hasRawCoordinate
-                            ? buildFailedPoint(point, message)
+                            ? buildFailedPoint(point, {
+                                coordinateStateText: "高德脚本加载失败",
+                                coordinateWarning: message,
+                                failureStage: "load-script",
+                                failureReasonCode: "script_load_failed"
+                            })
                             : point),
                         [buildBatchError("load-script", message)]);
                 }
@@ -204,7 +331,12 @@
                         : "高德地图坐标转换失败，需人工确认。";
                     return buildBatchPayload(
                         safePoints.map((point) => point.hasRawCoordinate
-                            ? buildFailedPoint(point, message)
+                            ? buildFailedPoint(point, {
+                                coordinateStateText: "高德批量转换失败",
+                                coordinateWarning: message,
+                                failureStage: "convert-batch",
+                                failureReasonCode: "convert_batch_failed"
+                            })
                             : point),
                         [buildBatchError("convert-batch", message)]);
                 }

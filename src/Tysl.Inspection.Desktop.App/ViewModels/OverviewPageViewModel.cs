@@ -19,7 +19,10 @@ public sealed partial class OverviewPageViewModel(
     private int offlineCount;
 
     [ObservableProperty]
-    private int unlocatedCount;
+    private int unmappedCount;
+
+    [ObservableProperty]
+    private string unmappedSummaryText = "未上图 = 平台未提供坐标 + 坐标获取限频 + 坐标转换或解析失败。";
 
     [ObservableProperty]
     private string lastSyncedAtText = "尚无同步记录";
@@ -36,7 +39,16 @@ public sealed partial class OverviewPageViewModel(
         TotalPoints = stats.TotalPoints;
         OnlineCount = stats.OnlineCount;
         OfflineCount = stats.OfflineCount;
-        UnlocatedCount = stats.UnlocatedCount;
+        UnmappedCount = stats.CoordinateStats.UnmappedCount;
+        UnmappedSummaryText = stats.CoordinateStats.BuildUnmappedSummaryText();
         LastSyncedAtText = stats.LastSyncedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "尚无同步记录";
+
+        logger.LogInformation(
+            "Overview final coordinate summary. RenderedCount={RenderedCount}, UnmappedCount={UnmappedCount}, MissingCount={MissingCount}, RateLimitedCount={RateLimitedCount}, FailedCount={FailedCount}.",
+            stats.CoordinateStats.RenderedCount,
+            stats.CoordinateStats.UnmappedCount,
+            stats.CoordinateStats.MissingCount,
+            stats.CoordinateStats.RateLimitedCount,
+            stats.CoordinateStats.FailedCount);
     }
 }

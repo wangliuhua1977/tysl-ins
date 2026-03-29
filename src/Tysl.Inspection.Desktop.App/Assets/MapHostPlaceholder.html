@@ -180,7 +180,7 @@
                 <div class="stat"><span>已上图</span><strong id="renderedCount">0</strong></div>
                 <div class="stat"><span>在线</span><strong id="onlineCount">0</strong></div>
                 <div class="stat"><span>离线</span><strong id="offlineCount">0</strong></div>
-                <div class="stat"><span>未定位</span><strong id="unlocatedCount">0</strong></div>
+                <div class="stat"><span>未上图</span><strong id="unmappedCount">0</strong></div>
             </div>
         </section>
 
@@ -190,9 +190,9 @@
             <div id="infoGrid" class="info-grid"></div>
 
             <div class="section">
-                <h2>未定位点位</h2>
-                <div id="unlocatedSummary" class="unlocated-summary">暂无未定位点位。</div>
-                <div id="unlocatedList" class="unlocated-list"></div>
+                <h2>未上图点位</h2>
+                <div id="unmappedSummary" class="unlocated-summary">暂无未上图点位。</div>
+                <div id="unmappedList" class="unlocated-list"></div>
             </div>
         </section>
 
@@ -210,13 +210,13 @@
         const renderedEl = document.getElementById("renderedCount");
         const onlineEl = document.getElementById("onlineCount");
         const offlineEl = document.getElementById("offlineCount");
-        const unlocatedEl = document.getElementById("unlocatedCount");
+        const unmappedEl = document.getElementById("unmappedCount");
         const emptyEl = document.getElementById("empty");
         const infoTitleEl = document.getElementById("infoTitle");
         const infoHintEl = document.getElementById("infoHint");
         const infoGridEl = document.getElementById("infoGrid");
-        const unlocatedSummaryEl = document.getElementById("unlocatedSummary");
-        const unlocatedListEl = document.getElementById("unlocatedList");
+        const unmappedSummaryEl = document.getElementById("unmappedSummary");
+        const unmappedListEl = document.getElementById("unmappedList");
 
         const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({
             "&": "&amp;",
@@ -282,7 +282,7 @@
             renderedEl.textContent = stats.renderedCount ?? 0;
             onlineEl.textContent = stats.onlineCount ?? 0;
             offlineEl.textContent = stats.offlineCount ?? 0;
-            unlocatedEl.textContent = stats.unlocatedCount ?? 0;
+            unmappedEl.textContent = stats.unmappedCount ?? 0;
         }
 
         function setStatus(text) {
@@ -321,7 +321,7 @@
             }
 
             if (point.coordinateState === "failed") {
-                return "坐标转换失败，需人工确认";
+                return point.coordinateStateText || "坐标转换或解析失败";
             }
 
             return "无";
@@ -389,13 +389,13 @@
             ]);
         }
 
-        function buildUnlocatedReason(point) {
+        function buildUnmappedReason(point) {
             if (point.coordinateState === "rate_limited") {
                 return "坐标获取限频，稍后重试";
             }
 
             if (point.coordinateState === "failed") {
-                return point.coordinateStateText || "坐标转换失败，需人工确认";
+                return point.coordinateStateText || "坐标转换或解析失败";
             }
 
             if (!point.hasRawCoordinate) {
@@ -405,27 +405,27 @@
             return coordinateStateText(point);
         }
 
-        function setUnlocated(points) {
-            const unlocated = points.filter((point) => !point.hasMapCoordinate);
-            if (unlocated.length === 0) {
-                unlocatedSummaryEl.textContent = "暂无未定位点位。";
-                unlocatedListEl.innerHTML = "";
+        function setUnmapped(points) {
+            const unmapped = points.filter((point) => !point.hasMapCoordinate);
+            if (unmapped.length === 0) {
+                unmappedSummaryEl.textContent = "暂无未上图点位。";
+                unmappedListEl.innerHTML = "";
                 return;
             }
 
-            const failedCount = unlocated.filter((point) => point.coordinateState === "failed").length;
-            const rateLimitedCount = unlocated.filter((point) => point.coordinateState === "rate_limited").length;
-            const missingCount = unlocated.filter((point) => point.coordinateState === "missing").length;
+            const failedCount = unmapped.filter((point) => point.coordinateState === "failed").length;
+            const rateLimitedCount = unmapped.filter((point) => point.coordinateState === "rate_limited").length;
+            const missingCount = unmapped.filter((point) => point.coordinateState === "missing").length;
 
             if (failedCount > 0) {
-                unlocatedSummaryEl.textContent = `共 ${unlocated.length} 个未上图点位，其中 ${failedCount} 个坐标转换失败、${rateLimitedCount} 个坐标获取限频、${missingCount} 个平台未提供坐标。`;
+                unmappedSummaryEl.textContent = `共 ${unmapped.length} 个未上图点位，其中 ${missingCount} 个平台未提供坐标、${rateLimitedCount} 个坐标获取限频、${failedCount} 个坐标转换或解析失败。`;
             } else if (rateLimitedCount > 0) {
-                unlocatedSummaryEl.textContent = `共 ${unlocated.length} 个未上图点位，其中 ${rateLimitedCount} 个坐标获取限频、${missingCount} 个平台未提供坐标。`;
+                unmappedSummaryEl.textContent = `共 ${unmapped.length} 个未上图点位，其中 ${missingCount} 个平台未提供坐标、${rateLimitedCount} 个坐标获取限频。`;
             } else {
-                unlocatedSummaryEl.textContent = `共 ${unlocated.length} 个未定位点位。`;
+                unmappedSummaryEl.textContent = `共 ${unmapped.length} 个未上图点位，其中 ${missingCount} 个平台未提供坐标。`;
             }
 
-            unlocatedListEl.innerHTML = unlocated.map((point) => {
+            unmappedListEl.innerHTML = unmapped.map((point) => {
                 const location = readLocation(point);
                 return `
                     <article class="unlocated-item">
@@ -435,7 +435,7 @@
                                 ["设备编码", displayText(point.deviceCode)],
                                 ["分组编号", displayText(point.groupId)],
                                 ["平台原始坐标", rawCoordinateText(point)],
-                                ["未上图原因", buildUnlocatedReason(point)],
+                                ["未上图原因", buildUnmappedReason(point)],
                                 ["说明", coordinateWarningText(point)],
                                 [location.label, location.value]
                             ])}
@@ -607,6 +607,7 @@
             post("coordinate-conversion-completed", {
                 renderedCount: converted.filter((point) => point.hasMapCoordinate).length,
                 missingCount: converted.filter((point) => !point.hasRawCoordinate).length,
+                rateLimitedCount: converted.filter((point) => point.coordinateState === "rate_limited").length,
                 failedCount: failed.length
             });
 
@@ -621,7 +622,7 @@
             const failedCount = points.filter((point) => point.coordinateState === "failed").length;
 
             if (failedCount > 0) {
-                return `已读取 ${total} 个本地点位，其中 ${renderedCount} 个完成上图，${missingCount} 个平台未提供坐标，${rateLimitedCount} 个坐标获取限频，${failedCount} 个坐标转换失败，需人工确认。`;
+                return `已读取 ${total} 个本地点位，其中 ${renderedCount} 个完成上图，${missingCount} 个平台未提供坐标，${rateLimitedCount} 个坐标获取限频，${failedCount} 个坐标转换或解析失败。`;
             }
 
             if (rateLimitedCount > 0) {
@@ -636,14 +637,30 @@
                 renderedCount: points.filter((point) => point.hasMapCoordinate).length,
                 onlineCount: points.filter((point) => point.onlineStatus === 1).length,
                 offlineCount: points.filter((point) => point.onlineStatus === 0).length,
-                unlocatedCount: points.filter((point) => !point.hasMapCoordinate).length
+                unmappedCount: points.filter((point) => !point.hasMapCoordinate).length
             });
             setStatus(buildStatusText(points));
-            setUnlocated(points);
+            setUnmapped(points);
         }
 
         function renderMap(points) {
             const renderable = points.filter((point) => point.hasMapCoordinate);
+            const invalidMapCoordinateCount = points.filter((point) => {
+                if (!point.hasMapCoordinate) {
+                    return false;
+                }
+
+                const lng = Number(point.mapLongitude);
+                const lat = Number(point.mapLatitude);
+                return !Number.isFinite(lng) || !Number.isFinite(lat);
+            }).length;
+
+            post("bootstrap-consumed", {
+                expectedRenderedCount: renderable.length,
+                actualRenderableCount: renderable.filter((point) => Number.isFinite(Number(point.mapLongitude)) && Number.isFinite(Number(point.mapLatitude))).length,
+                invalidMapCoordinateCount
+            });
+
             if (!state.map) {
                 state.map = new AMap.Map("map", {
                     zoom: 4,
@@ -694,7 +711,7 @@
             const points = Array.isArray(bootstrap.points) ? bootstrap.points : [];
 
             if (!mapCfg.shouldLoadMap) {
-                setUnlocated(points);
+                setUnmapped(points);
                 showEmpty(mapCfg.hasMapKey ? "本地点位数据不可用，暂不加载地图。" : "缺少高德地图 Key，无法加载地图。");
                 setInfo(null);
                 return;
