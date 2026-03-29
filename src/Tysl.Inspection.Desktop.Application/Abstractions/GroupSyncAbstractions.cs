@@ -54,6 +54,15 @@ public interface IPreviewService
     Task<InspectResult> InspectAsync(string deviceCode, CancellationToken cancellationToken);
 }
 
+public interface IInspectAbnormalStore
+{
+    IReadOnlyList<InspectAbnormalItem> GetItems();
+
+    InspectAbnormalItem? Add(InspectResult result);
+
+    InspectAbnormalItem? ToggleReviewed(Guid id);
+}
+
 public interface IPlayProbe
 {
     Task<PlayProbeResult> ProbeAsync(PlayProbeArgs args, CancellationToken cancellationToken);
@@ -97,6 +106,25 @@ public sealed record PlayProbeResult(
     bool EnteredPlaying,
     string FailureCategory,
     string DetailMessage);
+
+public sealed record InspectAbnormalItem(
+    Guid Id,
+    DateTimeOffset InspectAt,
+    string DeviceName,
+    string DeviceCode,
+    string Conclusion,
+    string AbnormalClassText,
+    string SummaryText,
+    bool IsReviewed)
+{
+    public string DeviceDisplayText => $"{DeviceName}（{DeviceCode}）";
+
+    public string InspectAtText => InspectAt.ToString("yyyy-MM-dd HH:mm:ss");
+
+    public string ReviewedText => IsReviewed ? "已复核" : "未复核";
+
+    public string ReviewActionText => IsReviewed ? "取消已复核" : "标记已复核";
+}
 
 public enum InspectAbnormalClass
 {

@@ -28,6 +28,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IOverviewStatsService, OverviewStatsService>();
         services.AddSingleton<IMapService, MapService>();
         services.AddSingleton<IPreviewService, PreviewService>();
+        services.AddSingleton<IInspectAbnormalStore, InspectAbnormalStore>();
 
         var openPlatformOptions = configuration.GetSection("Tianyi").Get<TianyiOpenPlatformOptions>() ?? new TianyiOpenPlatformOptions();
         if (openPlatformOptions.HasRequiredSecrets())

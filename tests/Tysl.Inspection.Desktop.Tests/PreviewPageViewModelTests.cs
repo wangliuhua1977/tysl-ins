@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Tysl.Inspection.Desktop.Application.Abstractions;
+using Tysl.Inspection.Desktop.Application.Services;
 using Tysl.Inspection.Desktop.App.Services;
 using Tysl.Inspection.Desktop.App.ViewModels;
 
@@ -14,6 +15,7 @@ public sealed class PreviewPageViewModelTests
         var playWinService = new StubPlayWinSvc();
         var viewModel = new PreviewPageViewModel(
             previewService,
+            new InspectAbnormalStore(NullLogger<InspectAbnormalStore>.Instance),
             playWinService,
             NullLogger<PreviewPageViewModel>.Instance);
 
@@ -42,6 +44,7 @@ public sealed class PreviewPageViewModelTests
         var playWinService = new StubPlayWinSvc();
         var viewModel = new PreviewPageViewModel(
             previewService,
+            new InspectAbnormalStore(NullLogger<InspectAbnormalStore>.Instance),
             playWinService,
             NullLogger<PreviewPageViewModel>.Instance);
 
@@ -80,6 +83,7 @@ public sealed class PreviewPageViewModelTests
         };
         var viewModel = new PreviewPageViewModel(
             previewService,
+            new InspectAbnormalStore(NullLogger<InspectAbnormalStore>.Instance),
             new StubPlayWinSvc(),
             NullLogger<PreviewPageViewModel>.Instance);
 
@@ -97,6 +101,47 @@ public sealed class PreviewPageViewModelTests
         Assert.Contains("巡检时间：2026-03-28 10:05:00", viewModel.InspectSummaryText);
         Assert.Contains("设备：测试设备（dev-001）", viewModel.InspectSummaryText);
         Assert.Contains("前置归类：播放失败", viewModel.InspectSummaryText);
+    }
+
+    [Fact]
+    public async Task RequestInspectAsync_AddsSessionAbnormal_AndAllowsReviewedToggle()
+    {
+        var previewService = new StubPreviewService
+        {
+            InspectResult = new InspectResult(
+                DateTimeOffset.Parse("2026-03-28T10:05:00+08:00"),
+                "测试设备",
+                "dev-001",
+                true,
+                "在线",
+                true,
+                true,
+                false,
+                "巡检失败：播放建链失败",
+                "播放建链失败",
+                "播放器未能完成播放建链。",
+                InspectAbnormalClass.PlayFailed)
+        };
+        var store = new InspectAbnormalStore(NullLogger<InspectAbnormalStore>.Instance);
+        var viewModel = new PreviewPageViewModel(
+            previewService,
+            store,
+            new StubPlayWinSvc(),
+            NullLogger<PreviewPageViewModel>.Instance);
+
+        await viewModel.InitializeAsync();
+        await viewModel.RequestInspectCommand.ExecuteAsync(null);
+
+        var item = Assert.Single(viewModel.AbnormalItems);
+        Assert.Equal("播放失败", item.AbnormalClassText);
+        Assert.Equal("未复核", item.ReviewedText);
+        Assert.Contains("当前会话异常列表共 1 条", viewModel.AbnormalListHintText);
+
+        viewModel.ToggleReviewedCommand.Execute(item);
+
+        var updated = Assert.Single(viewModel.AbnormalItems);
+        Assert.True(updated.IsReviewed);
+        Assert.Equal("已复核", updated.ReviewedText);
     }
 
     [Fact]
@@ -120,6 +165,7 @@ public sealed class PreviewPageViewModelTests
         };
         var viewModel = new PreviewPageViewModel(
             previewService,
+            new InspectAbnormalStore(NullLogger<InspectAbnormalStore>.Instance),
             new StubPlayWinSvc(),
             NullLogger<PreviewPageViewModel>.Instance);
 
@@ -129,6 +175,39 @@ public sealed class PreviewPageViewModelTests
         Assert.Equal(string.Empty, viewModel.InspectAbnormalClassText);
         Assert.Equal("巡检失败：设备状态未获取", viewModel.InspectConclusion);
         Assert.Equal("状态查询失败", viewModel.InspectFailureCategory);
+        Assert.Empty(viewModel.AbnormalItems);
+    }
+
+    [Fact]
+    public async Task RequestInspectAsync_DoesNotAddSessionAbnormal_WhenInspectPasses()
+    {
+        var previewService = new StubPreviewService
+        {
+            InspectResult = new InspectResult(
+                DateTimeOffset.Parse("2026-03-28T10:06:00+08:00"),
+                "测试设备",
+                "dev-001",
+                true,
+                "在线",
+                true,
+                true,
+                true,
+                "巡检通过",
+                string.Empty,
+                "播放器已进入 Playing 播放态。",
+                InspectAbnormalClass.None)
+        };
+        var viewModel = new PreviewPageViewModel(
+            previewService,
+            new InspectAbnormalStore(NullLogger<InspectAbnormalStore>.Instance),
+            new StubPlayWinSvc(),
+            NullLogger<PreviewPageViewModel>.Instance);
+
+        await viewModel.InitializeAsync();
+        await viewModel.RequestInspectCommand.ExecuteAsync(null);
+
+        Assert.Empty(viewModel.AbnormalItems);
+        Assert.Contains("当前会话尚无异常项", viewModel.AbnormalListHintText);
     }
 
     [Theory]

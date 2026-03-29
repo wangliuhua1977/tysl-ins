@@ -9,12 +9,15 @@ namespace Tysl.Inspection.Desktop.App.ViewModels;
 
 public sealed partial class PreviewPageViewModel(
     IPreviewService previewService,
+    IInspectAbnormalStore abnormalStore,
     IPlayWinSvc playWinSvc,
     ILogger<PreviewPageViewModel> logger) : ObservableObject
 {
     private bool hasLoaded;
 
     public ObservableCollection<PreviewDeviceOption> Devices { get; } = [];
+
+    public ObservableCollection<InspectAbnormalItem> AbnormalItems { get; } = [];
 
     [ObservableProperty]
     private string pageStatusText = "正在加载本地点位...";
@@ -73,6 +76,10 @@ public sealed partial class PreviewPageViewModel(
         ? "RTSP 地址已就绪，可打开独立播放窗口。"
         : "请先成功获取 RTSP 地址后再打开播放窗口。";
 
+    public string AbnormalListHintText => AbnormalItems.Count > 0
+        ? $"当前会话异常列表共 {AbnormalItems.Count} 条，仅保留内存态；“已复核”仅表示人工已看过。"
+        : "当前会话尚无异常项；巡检通过不会进入列表。";
+
     public async Task InitializeAsync()
     {
         if (hasLoaded)
@@ -91,6 +98,7 @@ public sealed partial class PreviewPageViewModel(
         var currentCode = SelectedDevice?.DeviceCode;
         var result = await previewService.LoadLocalDevicesAsync(CancellationToken.None);
         Devices.Clear();
+        ReloadAbnormalItems();
 
         foreach (var device in result.Devices)
         {
@@ -173,6 +181,7 @@ public sealed partial class PreviewPageViewModel(
 
             var result = await previewService.InspectAsync(SelectedDevice.DeviceCode, CancellationToken.None);
             ApplyInspect(result);
+            AddAbnormalItem(result);
             PageStatusText = "最小巡检诊断已完成，请查看结果。";
         }
         catch (Exception exception)
@@ -198,6 +207,23 @@ public sealed partial class PreviewPageViewModel(
         {
             IsBusy = false;
         }
+    }
+
+    [RelayCommand]
+    private void ToggleReviewed(InspectAbnormalItem? item)
+    {
+        if (item is null)
+        {
+            return;
+        }
+
+        var updated = abnormalStore.ToggleReviewed(item.Id);
+        if (updated is null)
+        {
+            return;
+        }
+
+        ReplaceAbnormalItem(item, updated);
     }
 
     [RelayCommand(CanExecute = nameof(CanOpenPlayWindow))]
@@ -315,6 +341,18 @@ public sealed partial class PreviewPageViewModel(
             InspectSummaryText.Length);
     }
 
+    private void AddAbnormalItem(InspectResult result)
+    {
+        var item = abnormalStore.Add(result);
+        if (item is null)
+        {
+            return;
+        }
+
+        AbnormalItems.Insert(0, item);
+        OnPropertyChanged(nameof(AbnormalListHintText));
+    }
+
     private void ResetInspectResult()
     {
         InspectConclusion = "尚未发起巡检诊断";
@@ -324,5 +362,33 @@ public sealed partial class PreviewPageViewModel(
         InspectDetailText = "仅在发起巡检诊断后展示最小结果。";
         InspectAtText = "暂无";
         InspectSummaryText = "仅在发起巡检诊断后生成最小处置摘要。";
+    }
+
+    private void ReloadAbnormalItems()
+    {
+        AbnormalItems.Clear();
+
+        foreach (var item in abnormalStore.GetItems())
+        {
+            AbnormalItems.Add(item);
+        }
+
+        OnPropertyChanged(nameof(AbnormalListHintText));
+    }
+
+    private void ReplaceAbnormalItem(InspectAbnormalItem current, InspectAbnormalItem updated)
+    {
+        var index = AbnormalItems.IndexOf(current);
+        if (index >= 0)
+        {
+            AbnormalItems[index] = updated;
+        }
+        else
+        {
+            ReloadAbnormalItems();
+            return;
+        }
+
+        OnPropertyChanged(nameof(AbnormalListHintText));
     }
 }

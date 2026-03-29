@@ -31,6 +31,11 @@
         </Border>
 
         <Grid Grid.Row="1" Margin="24,0,24,24">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="12" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="380" />
                 <ColumnDefinition Width="12" />
@@ -256,6 +261,89 @@
                                Foreground="{DynamicResource PrimaryTextBrush}"
                                Text="{Binding RequestedAtText}" />
                 </Grid>
+            </Border>
+
+            <Border Grid.Row="2"
+                    Grid.ColumnSpan="3"
+                    Padding="20"
+                    Background="{DynamicResource CardBrush}"
+                    BorderBrush="{DynamicResource CardBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="20">
+                <StackPanel>
+                    <TextBlock FontSize="18"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource PrimaryTextBrush}"
+                               Text="当前会话异常列表" />
+                    <TextBlock Margin="0,8,0,0"
+                               Foreground="{DynamicResource SecondaryTextBrush}"
+                               TextWrapping="Wrap"
+                               Text="{Binding AbnormalListHintText}" />
+
+                    <ScrollViewer Margin="0,16,0,0"
+                                  MaxHeight="320"
+                                  VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{Binding AbnormalItems}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Margin="0,0,0,12"
+                                            Padding="16"
+                                            Background="{DynamicResource WindowBackgroundBrush}"
+                                            BorderBrush="{DynamicResource CardBorderBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="16">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+
+                                            <StackPanel>
+                                                <TextBlock FontWeight="SemiBold"
+                                                           Foreground="{DynamicResource PrimaryTextBrush}"
+                                                           Text="{Binding DeviceDisplayText}" />
+                                                <TextBlock Margin="0,6,0,0"
+                                                           Foreground="{DynamicResource SecondaryTextBrush}"
+                                                           Text="{Binding InspectAtText}" />
+                                            </StackPanel>
+
+                                            <Button Grid.Column="1"
+                                                    Padding="14,8"
+                                                    Command="{Binding DataContext.ToggleReviewedCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding}"
+                                                    Content="{Binding ReviewActionText}" />
+
+                                            <TextBlock Grid.Row="1"
+                                                       Grid.ColumnSpan="2"
+                                                       Margin="0,12,0,0"
+                                                       Foreground="{DynamicResource PrimaryTextBrush}"
+                                                       TextWrapping="Wrap">
+                                                <Run Text="前置归类：" />
+                                                <Run Text="{Binding AbnormalClassText}" />
+                                                <Run Text="    结论：" />
+                                                <Run Text="{Binding Conclusion}" />
+                                                <Run Text="    已复核：" />
+                                                <Run Text="{Binding ReviewedText}" />
+                                            </TextBlock>
+
+                                            <TextBlock Grid.Row="2"
+                                                       Grid.ColumnSpan="2"
+                                                       Margin="0,12,0,0"
+                                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                                       TextWrapping="Wrap"
+                                                       Text="{Binding SummaryText}" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </StackPanel>
             </Border>
         </Grid>
     </Grid>
