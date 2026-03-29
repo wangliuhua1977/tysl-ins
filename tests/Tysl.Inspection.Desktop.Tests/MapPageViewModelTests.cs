@@ -30,7 +30,21 @@ public sealed class MapPageViewModelTests
                             1,
                             0,
                             DateTimeOffset.Parse("2026-03-29T09:30:00+08:00"))
-                    ])),
+                    ])
+                {
+                    ProjectionByDeviceCode = new Dictionary<string, CoordinateProjectionResult>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["dev-001"] = new(
+                            "dev-001",
+                            true,
+                            true,
+                            "converted",
+                            "已转换为高德",
+                            "地图 marker 仅使用转换后的高德坐标。",
+                            "31.224361",
+                            "121.469170")
+                    }
+                }),
             new MapOptions
             {
                 JsKey = "__SET_IN_LOCAL_FILE__",
@@ -48,11 +62,11 @@ public sealed class MapPageViewModelTests
         Assert.Equal("gaode", map.GetProperty("renderCoordinateSystem").GetString());
         Assert.Equal("31.2304", point.GetProperty("rawLatitude").GetString());
         Assert.Equal("121.4737", point.GetProperty("rawLongitude").GetString());
-        Assert.Equal(string.Empty, point.GetProperty("mapLatitude").GetString());
-        Assert.Equal(string.Empty, point.GetProperty("mapLongitude").GetString());
+        Assert.Equal("31.224361", point.GetProperty("mapLatitude").GetString());
+        Assert.Equal("121.469170", point.GetProperty("mapLongitude").GetString());
         Assert.True(point.GetProperty("hasRawCoordinate").GetBoolean());
-        Assert.False(point.GetProperty("hasMapCoordinate").GetBoolean());
-        Assert.Equal("pending", point.GetProperty("coordinateState").GetString());
+        Assert.True(point.GetProperty("hasMapCoordinate").GetBoolean());
+        Assert.Equal("converted", point.GetProperty("coordinateState").GetString());
         Assert.False(point.TryGetProperty("latitude", out _));
         Assert.False(point.TryGetProperty("longitude", out _));
     }
@@ -78,7 +92,21 @@ public sealed class MapPageViewModelTests
                             0,
                             0,
                             DateTimeOffset.Parse("2026-03-29T09:35:00+08:00"))
-                    ])),
+                    ])
+                {
+                    ProjectionByDeviceCode = new Dictionary<string, CoordinateProjectionResult>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["dev-002"] = new(
+                            "dev-002",
+                            false,
+                            false,
+                            "missing",
+                            "平台未提供坐标",
+                            "平台未提供坐标，当前不进入上图。",
+                            null,
+                            null)
+                    }
+                }),
             new MapOptions
             {
                 JsKey = "__SET_IN_LOCAL_FILE__",
@@ -94,8 +122,64 @@ public sealed class MapPageViewModelTests
         Assert.False(point.GetProperty("hasRawCoordinate").GetBoolean());
         Assert.False(point.GetProperty("hasMapCoordinate").GetBoolean());
         Assert.Equal("missing", point.GetProperty("coordinateState").GetString());
-        Assert.Equal("无坐标", point.GetProperty("coordinateStateText").GetString());
-        Assert.Contains("无法执行百度转高德", point.GetProperty("coordinateWarning").GetString());
+        Assert.Equal("平台未提供坐标", point.GetProperty("coordinateStateText").GetString());
+        Assert.Contains("平台未提供坐标", point.GetProperty("coordinateWarning").GetString());
+    }
+
+    [Fact]
+    public async Task InitializeAsync_KeepsFailedProjectionOutOfMapRendering()
+    {
+        var viewModel = new MapPageViewModel(
+            new StubMapService(
+                new MapLoadResult(
+                    true,
+                    string.Empty,
+                    [
+                        new InspectionDevice(
+                            "dev-003",
+                            "转换失败设备",
+                            "group-001",
+                            "31.2304",
+                            "121.4737",
+                            "上海",
+                            1,
+                            1,
+                            1,
+                            0,
+                            DateTimeOffset.Parse("2026-03-29T09:40:00+08:00"),
+                            "platform",
+                            "available",
+                            "平台原始坐标来自 getDeviceInfoByDeviceCode。")
+                    ])
+                {
+                    ProjectionByDeviceCode = new Dictionary<string, CoordinateProjectionResult>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["dev-003"] = new(
+                            "dev-003",
+                            true,
+                            false,
+                            "failed",
+                            "坐标转换失败，需人工确认",
+                            "高德坐标转换未完成，需人工确认。",
+                            null,
+                            null)
+                    }
+                }),
+            new MapOptions
+            {
+                JsKey = "__SET_IN_LOCAL_FILE__",
+                SecurityJsCode = "__SET_IN_LOCAL_FILE__"
+            },
+            NullLogger<MapPageViewModel>.Instance);
+
+        await viewModel.InitializeAsync();
+
+        using var document = JsonDocument.Parse(viewModel.MapBootstrapJson);
+        var point = document.RootElement.GetProperty("points")[0];
+
+        Assert.False(point.GetProperty("hasMapCoordinate").GetBoolean());
+        Assert.Equal("failed", point.GetProperty("coordinateState").GetString());
+        Assert.Equal("坐标转换失败，需人工确认", point.GetProperty("coordinateStateText").GetString());
     }
 
     private sealed class StubMapService(MapLoadResult result) : IMapService

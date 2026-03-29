@@ -149,8 +149,8 @@ public sealed class SqliteGroupSyncStore(
             """
             SELECT COUNT(*)
             FROM Device
-            WHERE TRIM(IFNULL(latitude, '')) = ''
-               OR TRIM(IFNULL(longitude, '')) = '';
+            WHERE TRIM(IFNULL(rawLatitude, '')) = ''
+               OR TRIM(IFNULL(rawLongitude, '')) = '';
             """,
             cancellationToken);
 
@@ -211,9 +211,12 @@ public sealed class SqliteGroupSyncStore(
                 deviceCode,
                 deviceName,
                 groupId,
-                latitude,
-                longitude,
+                rawLatitude,
+                rawLongitude,
                 location,
+                coordinateSource,
+                coordinateStatus,
+                coordinateStatusMessage,
                 onlineStatus,
                 cloudStatus,
                 bandStatus,
@@ -297,6 +300,54 @@ public sealed class SqliteGroupSyncStore(
         command.Parameters.AddWithValue("@manualConfirmationNote", maintenance.ManualConfirmationNote);
         command.Parameters.AddWithValue("@updatedAt", maintenance.UpdatedAt.ToString("O", CultureInfo.InvariantCulture));
         await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task UpdateDevicePlatformDataAsync(
+        IReadOnlyCollection<InspectionDevice> devices,
+        CancellationToken cancellationToken)
+    {
+        if (devices.Count == 0)
+        {
+            return;
+        }
+
+        await using var connection = CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+
+        foreach (var device in devices)
+        {
+            await using var update = connection.CreateCommand();
+            update.Transaction = transaction;
+            update.CommandText = """
+                UPDATE Device
+                SET deviceName = @deviceName,
+                    latitude = @latitude,
+                    longitude = @longitude,
+                    rawLatitude = @rawLatitude,
+                    rawLongitude = @rawLongitude,
+                    location = @location,
+                    coordinateSource = @coordinateSource,
+                    coordinateStatus = @coordinateStatus,
+                    coordinateStatusMessage = @coordinateStatusMessage,
+                    syncedAt = @syncedAt
+                WHERE deviceCode = @deviceCode;
+                """;
+            update.Parameters.AddWithValue("@deviceCode", device.DeviceCode);
+            update.Parameters.AddWithValue("@deviceName", device.DeviceName);
+            update.Parameters.AddWithValue("@latitude", (object?)device.Latitude ?? DBNull.Value);
+            update.Parameters.AddWithValue("@longitude", (object?)device.Longitude ?? DBNull.Value);
+            update.Parameters.AddWithValue("@rawLatitude", (object?)device.RawLatitude ?? DBNull.Value);
+            update.Parameters.AddWithValue("@rawLongitude", (object?)device.RawLongitude ?? DBNull.Value);
+            update.Parameters.AddWithValue("@location", (object?)device.Location ?? DBNull.Value);
+            update.Parameters.AddWithValue("@coordinateSource", device.CoordinateSource ?? string.Empty);
+            update.Parameters.AddWithValue("@coordinateStatus", device.CoordinateStatus ?? string.Empty);
+            update.Parameters.AddWithValue("@coordinateStatusMessage", device.CoordinateStatusMessage ?? string.Empty);
+            update.Parameters.AddWithValue("@syncedAt", device.SyncedAt.ToString("O", CultureInfo.InvariantCulture));
+            await update.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task<LocalSyncSnapshot> GetLocalSyncSnapshotAsync(CancellationToken cancellationToken)
@@ -386,7 +437,12 @@ public sealed class SqliteGroupSyncStore(
                 groupId,
                 latitude,
                 longitude,
+                rawLatitude,
+                rawLongitude,
                 location,
+                coordinateSource,
+                coordinateStatus,
+                coordinateStatusMessage,
                 onlineStatus,
                 cloudStatus,
                 bandStatus,
@@ -398,7 +454,12 @@ public sealed class SqliteGroupSyncStore(
                 @groupId,
                 @latitude,
                 @longitude,
+                @rawLatitude,
+                @rawLongitude,
                 @location,
+                @coordinateSource,
+                @coordinateStatus,
+                @coordinateStatusMessage,
                 @onlineStatus,
                 @cloudStatus,
                 @bandStatus,
@@ -410,7 +471,12 @@ public sealed class SqliteGroupSyncStore(
         insert.Parameters.AddWithValue("@groupId", device.GroupId);
         insert.Parameters.AddWithValue("@latitude", (object?)device.Latitude ?? DBNull.Value);
         insert.Parameters.AddWithValue("@longitude", (object?)device.Longitude ?? DBNull.Value);
+        insert.Parameters.AddWithValue("@rawLatitude", (object?)device.RawLatitude ?? DBNull.Value);
+        insert.Parameters.AddWithValue("@rawLongitude", (object?)device.RawLongitude ?? DBNull.Value);
         insert.Parameters.AddWithValue("@location", (object?)device.Location ?? DBNull.Value);
+        insert.Parameters.AddWithValue("@coordinateSource", device.CoordinateSource ?? string.Empty);
+        insert.Parameters.AddWithValue("@coordinateStatus", device.CoordinateStatus ?? string.Empty);
+        insert.Parameters.AddWithValue("@coordinateStatusMessage", device.CoordinateStatusMessage ?? string.Empty);
         insert.Parameters.AddWithValue("@onlineStatus", (object?)device.OnlineStatus ?? DBNull.Value);
         insert.Parameters.AddWithValue("@cloudStatus", (object?)device.CloudStatus ?? DBNull.Value);
         insert.Parameters.AddWithValue("@bandStatus", (object?)device.BandStatus ?? DBNull.Value);
@@ -431,9 +497,12 @@ public sealed class SqliteGroupSyncStore(
                 deviceCode,
                 deviceName,
                 groupId,
-                latitude,
-                longitude,
+                rawLatitude,
+                rawLongitude,
                 location,
+                coordinateSource,
+                coordinateStatus,
+                coordinateStatusMessage,
                 onlineStatus,
                 cloudStatus,
                 bandStatus,
@@ -467,6 +536,9 @@ public sealed class SqliteGroupSyncStore(
             Latitude = device.Latitude ?? existingDevice.Latitude,
             Longitude = device.Longitude ?? existingDevice.Longitude,
             Location = device.Location ?? existingDevice.Location,
+            CoordinateSource = string.IsNullOrWhiteSpace(device.CoordinateSource) ? existingDevice.CoordinateSource : device.CoordinateSource,
+            CoordinateStatus = string.IsNullOrWhiteSpace(device.CoordinateStatus) ? existingDevice.CoordinateStatus : device.CoordinateStatus,
+            CoordinateStatusMessage = string.IsNullOrWhiteSpace(device.CoordinateStatusMessage) ? existingDevice.CoordinateStatusMessage : device.CoordinateStatusMessage,
             OnlineStatus = device.OnlineStatus ?? existingDevice.OnlineStatus,
             CloudStatus = device.CloudStatus ?? existingDevice.CloudStatus,
             BandStatus = device.BandStatus ?? existingDevice.BandStatus,
@@ -632,11 +704,14 @@ public sealed class SqliteGroupSyncStore(
             ReadNullableString(reader, 3),
             ReadNullableString(reader, 4),
             ReadNullableString(reader, 5),
-            ReadNullableInt32(reader, 6),
-            ReadNullableInt32(reader, 7),
-            ReadNullableInt32(reader, 8),
             ReadNullableInt32(reader, 9),
-            ReadSyncedAt(reader, 10));
+            ReadNullableInt32(reader, 10),
+            ReadNullableInt32(reader, 11),
+            ReadNullableInt32(reader, 12),
+            ReadSyncedAt(reader, 13),
+            ReadString(reader, 6),
+            ReadString(reader, 7),
+            ReadString(reader, 8));
     }
 
     private static string ReadString(SqliteDataReader reader, int ordinal)

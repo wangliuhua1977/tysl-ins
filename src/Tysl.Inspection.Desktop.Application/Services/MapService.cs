@@ -6,6 +6,8 @@ namespace Tysl.Inspection.Desktop.Application.Services;
 
 public sealed class MapService(
     IMapStore mapStore,
+    IDeviceCoordinateService deviceCoordinateService,
+    ICoordinateProjectionService coordinateProjectionService,
     ILogger<MapService> logger) : IMapService
 {
     public async Task<MapLoadResult> LoadAsync(CancellationToken cancellationToken)
@@ -13,8 +15,31 @@ public sealed class MapService(
         try
         {
             var devices = await mapStore.GetDevicesAsync(cancellationToken);
-            logger.LogInformation("Loaded {DeviceCount} devices for map rendering.", devices.Count);
-            return new MapLoadResult(true, string.Empty, devices);
+            var refreshedDevices = await deviceCoordinateService.RefreshPlatformCoordinatesAsync(devices, cancellationToken);
+            var projections = await coordinateProjectionService.ProjectBd09ToGcj02Async(
+                refreshedDevices
+                    .Select(device => new CoordinateProjectionRequest(
+                        device.DeviceCode,
+                        device.DeviceName,
+                        device.RawLatitude,
+                        device.RawLongitude))
+                    .ToArray(),
+                cancellationToken);
+
+            var renderedCount = projections.Values.Count(result => result.HasMapCoordinate);
+            var missingCount = projections.Values.Count(result => result.CoordinateState == "missing");
+            var failedCount = projections.Values.Count(result => result.CoordinateState == "failed");
+
+            logger.LogInformation(
+                "Map render coordinates resolved. RenderedCount={RenderedCount}, MissingCount={MissingCount}, FailedCount={FailedCount}.",
+                renderedCount,
+                missingCount,
+                failedCount);
+
+            return new MapLoadResult(true, string.Empty, refreshedDevices)
+            {
+                ProjectionByDeviceCode = projections
+            };
         }
         catch (Exception exception)
         {

@@ -343,19 +343,40 @@
                                     <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="平台原始经纬度" />
                                     <TextBlock Margin="0,4,0,0"
                                                Foreground="{DynamicResource PrimaryTextBrush}"
-                                               TextWrapping="Wrap">
-                                        <Run Text="{Binding SelectedDeviceLatitudeText}" />
-                                        <Run Text=" / " />
-                                        <Run Text="{Binding SelectedDeviceLongitudeText}" />
-                                    </TextBlock>
+                                               TextWrapping="Wrap"
+                                               Text="{Binding SelectedDeviceRawCoordinateText}" />
                                 </StackPanel>
 
                                 <StackPanel Grid.Column="2">
-                                    <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="地图渲染口径" />
+                                    <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="地图渲染坐标（高德）" />
                                     <TextBlock Margin="0,4,0,0"
                                                Foreground="{DynamicResource PrimaryTextBrush}"
                                                TextWrapping="Wrap"
-                                               Text="{Binding SelectedDeviceMapCoordinateUsageText}" />
+                                               Text="{Binding SelectedDeviceMapCoordinateText}" />
+                                </StackPanel>
+                            </Grid>
+
+                            <Grid Margin="0,12,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="坐标状态" />
+                                    <TextBlock Margin="0,4,0,0"
+                                               Foreground="{DynamicResource PrimaryTextBrush}"
+                                               TextWrapping="Wrap"
+                                               Text="{Binding SelectedDeviceCoordinateStatusText}" />
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="坐标说明" />
+                                    <TextBlock Margin="0,4,0,0"
+                                               Foreground="{DynamicResource PrimaryTextBrush}"
+                                               TextWrapping="Wrap"
+                                               Text="{Binding SelectedDeviceCoordinateRemarkText}" />
                                 </StackPanel>
                             </Grid>
 

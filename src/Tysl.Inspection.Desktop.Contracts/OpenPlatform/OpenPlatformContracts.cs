@@ -40,6 +40,13 @@ public sealed record OpenPlatformDeviceStatusPayload(
     string DeviceCode,
     int? OnlineStatus);
 
+public sealed record OpenPlatformDeviceInfoPayload(
+    string DeviceCode,
+    string DeviceName,
+    string? Latitude,
+    string? Longitude,
+    string? Location);
+
 public sealed record OpenPlatformPreviewUrlPayload(
     string Url,
     string? ExpireTime);
@@ -88,6 +95,10 @@ public interface IOpenPlatformClient
 
     Task<OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDeviceCountDto>>> GetRegionDeviceCountsAsync(
         string regionCode,
+        CancellationToken cancellationToken);
+
+    Task<OpenPlatformCallResult<OpenPlatformDeviceInfoPayload>> GetDeviceInfoByDeviceCodeAsync(
+        string deviceCode,
         CancellationToken cancellationToken);
 
     Task<OpenPlatformCallResult<OpenPlatformDeviceStatusPayload>> GetDeviceStatusAsync(

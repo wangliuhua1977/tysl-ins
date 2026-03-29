@@ -29,6 +29,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IOverviewStatsService, OverviewStatsService>();
         services.AddSingleton<IMapService, MapService>();
         services.AddSingleton<IPreviewService, PreviewService>();
+        services.AddSingleton<IDeviceCoordinateService, DeviceCoordSvc>();
         services.AddSingleton<IInspectAbnormalStore, InspectAbnormalStore>();
 
         var openPlatformOptions = configuration.GetSection("Tianyi").Get<TianyiOpenPlatformOptions>() ?? new TianyiOpenPlatformOptions();

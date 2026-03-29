@@ -60,7 +60,12 @@ public sealed partial class MapPageViewModel(
     {
         logger.LogError(exception, "WebView2 initialization failed for map page.");
         StatusText = $"地图页初始化失败：{exception.Message}";
-        MapBootstrapJson = BuildBootstrapJson(Array.Empty<InspectionDevice>(), StatusText, false, false);
+        MapBootstrapJson = BuildBootstrapJson(
+            Array.Empty<InspectionDevice>(),
+            new Dictionary<string, CoordinateProjectionResult>(StringComparer.OrdinalIgnoreCase),
+            StatusText,
+            false,
+            false);
     }
 
     public void ReportMapRenderFailure(string message)
@@ -80,6 +85,8 @@ public sealed partial class MapPageViewModel(
 
     public void ReportCoordinateConversionCompleted(int renderedCount, int missingCount, int failedCount)
     {
+        RenderedCount = renderedCount;
+        UnlocatedCount = missingCount + failedCount;
         logger.LogInformation(
             "Map coordinate conversion completed. RenderedCount={RenderedCount}, MissingCount={MissingCount}, FailedCount={FailedCount}.",
             renderedCount,
@@ -98,28 +105,40 @@ public sealed partial class MapPageViewModel(
     private void Apply(MapLoadResult result)
     {
         var devices = result.Devices;
+        var projections = result.ProjectionByDeviceCode;
         var totalCount = devices.Count;
-        RenderedCount = devices.Count(HasRawCoordinate);
+        var renderedCount = projections.Values.Count(item => item.HasMapCoordinate);
+        var missingCount = projections.Values.Count(item => item.CoordinateState == "missing");
+        var failedCount = projections.Values.Count(item => item.CoordinateState == "failed");
+
+        RenderedCount = renderedCount;
         OnlineCount = devices.Count(device => device.OnlineStatus == 1);
         OfflineCount = devices.Count(device => device.OnlineStatus == 0);
-        UnlocatedCount = devices.Count(device => !HasRawCoordinate(device));
+        UnlocatedCount = totalCount - renderedCount;
 
         var hasMapKey = mapOptions.HasJsKey();
         StatusText = result.Success
             ? hasMapKey
                 ? totalCount > 0
-                    ? $"已读取 {totalCount} 个本地点位，其中 {RenderedCount} 个具备平台原始坐标，地图渲染前将统一执行百度转高德。"
+                    ? BuildStatusText(totalCount, renderedCount, missingCount, failedCount)
                     : "本地 SQLite 中暂无点位数据。"
                 : totalCount > 0
                     ? $"已读取 {totalCount} 个本地点位，但缺少高德地图 Key 配置。"
                     : "本地 SQLite 中暂无点位数据，且缺少高德地图 Key 配置。"
             : result.Message;
 
-        MapBootstrapJson = BuildBootstrapJson(devices, StatusText, hasMapKey, hasMapKey && result.Success);
+        logger.LogInformation(
+            "Map page final render coordinate summary. RenderedCount={RenderedCount}, MissingCount={MissingCount}, FailedCount={FailedCount}.",
+            renderedCount,
+            missingCount,
+            failedCount);
+
+        MapBootstrapJson = BuildBootstrapJson(devices, projections, StatusText, hasMapKey, hasMapKey && result.Success);
     }
 
     private string BuildBootstrapJson(
         IReadOnlyList<InspectionDevice> devices,
+        IReadOnlyDictionary<string, CoordinateProjectionResult> projections,
         string statusText,
         bool hasMapKey,
         bool shouldLoadMap)
@@ -136,6 +155,7 @@ public sealed partial class MapPageViewModel(
                     jsApiVersion = string.IsNullOrWhiteSpace(mapOptions.JsApiVersion) ? "2.0" : mapOptions.JsApiVersion,
                     rawCoordinateSystem = RawCoordinateSystem,
                     renderCoordinateSystem = RenderCoordinateSystem,
+                    pointsPreconverted = projections.Count > 0,
                     hasMapKey,
                     shouldLoadMap
                 },
@@ -146,13 +166,18 @@ public sealed partial class MapPageViewModel(
                     offlineCount = OfflineCount,
                     unlocatedCount = UnlocatedCount
                 },
-                points = devices.Select(ProjectDevice).ToArray()
+                points = devices.Select(device => ProjectDevice(device, projections)).ToArray()
             },
             JsonOptions);
     }
 
-    private static object ProjectDevice(InspectionDevice device)
+    private static object ProjectDevice(
+        InspectionDevice device,
+        IReadOnlyDictionary<string, CoordinateProjectionResult> projections)
     {
+        projections.TryGetValue(device.DeviceCode, out var projection);
+        var hasRawCoordinate = HasRawCoordinate(device);
+
         return new
         {
             deviceCode = device.DeviceCode,
@@ -161,23 +186,23 @@ public sealed partial class MapPageViewModel(
             location = device.Location ?? string.Empty,
             locationLabel = GetLocationLabel(device.Location),
             locationDisplay = GetLocationDisplay(device.Location),
-            rawLatitude = device.Latitude ?? string.Empty,
-            rawLongitude = device.Longitude ?? string.Empty,
-            mapLatitude = string.Empty,
-            mapLongitude = string.Empty,
-            coordinateSource = RawCoordinateSystem,
-            coordinateSourceText = "平台原始坐标（百度）",
-            coordinateState = HasRawCoordinate(device) ? "pending" : "missing",
-            coordinateStateText = HasRawCoordinate(device) ? "待转换" : "无坐标",
-            coordinateWarning = HasRawCoordinate(device) ? string.Empty : "当前无平台坐标，无法执行百度转高德。",
+            rawLatitude = device.RawLatitude ?? string.Empty,
+            rawLongitude = device.RawLongitude ?? string.Empty,
+            mapLatitude = projection?.MapLatitude ?? string.Empty,
+            mapLongitude = projection?.MapLongitude ?? string.Empty,
+            coordinateSource = string.IsNullOrWhiteSpace(device.CoordinateSource) ? "none" : device.CoordinateSource,
+            coordinateSourceText = GetCoordinateSourceText(device),
+            coordinateState = projection?.CoordinateState ?? (hasRawCoordinate ? "pending" : "missing"),
+            coordinateStateText = projection?.CoordinateStateText ?? GetCoordinateStateText(device, hasRawCoordinate),
+            coordinateWarning = projection?.CoordinateWarning ?? GetCoordinateWarningText(device, hasRawCoordinate),
             onlineStatus = device.OnlineStatus,
             onlineStatusText = GetOnlineStatusText(device.OnlineStatus),
             cloudStatus = device.CloudStatus,
             bandStatus = device.BandStatus,
             sourceTypeFlag = device.SourceTypeFlag,
             syncedAt = device.SyncedAt,
-            hasRawCoordinate = HasRawCoordinate(device),
-            hasMapCoordinate = false
+            hasRawCoordinate,
+            hasMapCoordinate = projection?.HasMapCoordinate ?? false
         };
     }
 
@@ -198,6 +223,13 @@ public sealed partial class MapPageViewModel(
             out coordinate);
     }
 
+    private static string BuildStatusText(int totalCount, int renderedCount, int missingCount, int failedCount)
+    {
+        return failedCount > 0
+            ? $"已读取 {totalCount} 个本地点位，其中 {renderedCount} 个完成百度转高德并上图，{missingCount} 个平台未提供坐标，{failedCount} 个坐标转换失败，需人工确认。"
+            : $"已读取 {totalCount} 个本地点位，其中 {renderedCount} 个完成百度转高德并上图，{missingCount} 个平台未提供坐标。";
+    }
+
     private static string GetOnlineStatusText(int? onlineStatus)
     {
         return onlineStatus switch
@@ -208,6 +240,36 @@ public sealed partial class MapPageViewModel(
             3 => "休眠（保活/AOV）",
             _ => "未知"
         };
+    }
+
+    private static string GetCoordinateSourceText(InspectionDevice device)
+    {
+        return string.Equals(device.CoordinateSource, "platform", StringComparison.OrdinalIgnoreCase)
+            ? "平台原始坐标（BD-09）"
+            : "无";
+    }
+
+    private static string GetCoordinateStateText(InspectionDevice device, bool hasRawCoordinate)
+    {
+        return device.CoordinateStatus switch
+        {
+            "missing" => "平台未提供坐标",
+            "lookup_failed" => "平台坐标读取失败，需人工确认",
+            _ when hasRawCoordinate => "待转换",
+            _ => "平台未提供坐标"
+        };
+    }
+
+    private static string GetCoordinateWarningText(InspectionDevice device, bool hasRawCoordinate)
+    {
+        if (device.CoordinateStatus == "lookup_failed" && !string.IsNullOrWhiteSpace(device.CoordinateStatusMessage))
+        {
+            return device.CoordinateStatusMessage;
+        }
+
+        return hasRawCoordinate
+            ? "地图 marker 仅使用转换后的高德坐标。"
+            : "平台未提供坐标，当前不进入上图。";
     }
 
     private static string GetLocationLabel(string? location)

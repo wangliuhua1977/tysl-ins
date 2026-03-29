@@ -15,9 +15,11 @@ public sealed partial class PreviewPageViewModel(
     ILogger<PreviewPageViewModel> logger) : ObservableObject
 {
     private bool hasLoaded;
+    private int selectedDeviceDetailLoadVersion;
     private IReadOnlyDictionary<string, InspectionDevice> deviceDetailsByCode = new Dictionary<string, InspectionDevice>(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyDictionary<string, DeviceUserMaintenance> deviceMaintenanceByCode = new Dictionary<string, DeviceUserMaintenance>(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyDictionary<string, PreviewDirectoryGroupItem> directoryGroupById = new Dictionary<string, PreviewDirectoryGroupItem>(StringComparer.OrdinalIgnoreCase);
+    private CoordinateProjectionResult? selectedDeviceProjection;
 
     public ObservableCollection<PreviewDeviceOption> Devices { get; } = [];
 
@@ -86,10 +88,16 @@ public sealed partial class PreviewPageViewModel(
     private string selectedDeviceOnlineStatusText = "暂无";
 
     [ObservableProperty]
-    private string selectedDeviceLatitudeText = "未定位";
+    private string selectedDeviceLatitudeText = "无";
 
     [ObservableProperty]
-    private string selectedDeviceLongitudeText = "未定位";
+    private string selectedDeviceLongitudeText = "无";
+
+    [ObservableProperty]
+    private string selectedDeviceRawCoordinateText = "无";
+
+    [ObservableProperty]
+    private string selectedDeviceMapCoordinateText = "无";
 
     [ObservableProperty]
     private string selectedDeviceLocationText = "暂无";
@@ -110,10 +118,13 @@ public sealed partial class PreviewPageViewModel(
     private string selectedDeviceRecoveredStatusText = "暂无";
 
     [ObservableProperty]
-    private string selectedDeviceCoordinateSourceText = "无平台坐标";
+    private string selectedDeviceCoordinateSourceText = "无";
 
     [ObservableProperty]
-    private string selectedDeviceMapCoordinateUsageText = "暂无";
+    private string selectedDeviceCoordinateStatusText = "平台未提供坐标";
+
+    [ObservableProperty]
+    private string selectedDeviceCoordinateRemarkText = "平台未提供坐标，当前不进入上图。";
 
     [ObservableProperty]
     private string selectedDeviceMaintenanceStatusText = string.Empty;
@@ -564,6 +575,9 @@ public sealed partial class PreviewPageViewModel(
 
     partial void OnSelectedDeviceChanged(PreviewDeviceOption? value)
     {
+        selectedDeviceDetailLoadVersion++;
+        selectedDeviceProjection = null;
+
         if (value is null)
         {
             ResetPreviewResult();
@@ -572,6 +586,7 @@ public sealed partial class PreviewPageViewModel(
         {
             logger.LogInformation("Point detail load started for {DeviceCode}.", value.DeviceCode);
             ApplyDevice(value);
+            _ = LoadSelectedDeviceDetailAsync(value.DeviceCode, selectedDeviceDetailLoadVersion);
         }
 
         RequestPreviewCommand.NotifyCanExecuteChanged();
@@ -581,11 +596,6 @@ public sealed partial class PreviewPageViewModel(
         OnPropertyChanged(nameof(IsPlayWindowReady));
         OnPropertyChanged(nameof(PlayWindowHintText));
         RefreshSelectedDeviceDetailSummary();
-
-        if (value is not null)
-        {
-            LogSelectedDeviceDetailCompleted(value);
-        }
     }
 
     partial void OnIsBusyChanged(bool value)
@@ -737,15 +747,16 @@ public sealed partial class PreviewPageViewModel(
         var detail = GetSelectedDeviceDetail();
         SelectedDeviceDirectoryPathText = BuildDirectoryPathText(detail);
         SelectedDeviceOnlineStatusText = BuildOnlineStatusText(detail?.OnlineStatus ?? SelectedDevice.OnlineStatus);
-        SelectedDeviceLatitudeText = detail?.Latitude ?? "未定位";
-        SelectedDeviceLongitudeText = detail?.Longitude ?? "未定位";
+        SelectedDeviceLatitudeText = detail?.RawLatitude ?? "无";
+        SelectedDeviceLongitudeText = detail?.RawLongitude ?? "无";
+        SelectedDeviceRawCoordinateText = HasPlatformCoordinate(detail)
+            ? $"{SelectedDeviceLatitudeText} / {SelectedDeviceLongitudeText}"
+            : "无";
+        SelectedDeviceMapCoordinateText = BuildMapCoordinateText(selectedDeviceProjection);
         SelectedDeviceLocationText = string.IsNullOrWhiteSpace(detail?.Location) ? "暂无" : detail.Location!;
-        SelectedDeviceCoordinateSourceText = HasPlatformCoordinate(detail)
-            ? "百度（平台原始坐标）"
-            : "无平台坐标";
-        SelectedDeviceMapCoordinateUsageText = HasPlatformCoordinate(detail)
-            ? "地图页按高德 JS API 官方能力转换为高德坐标后渲染"
-            : "当前无可转换坐标";
+        SelectedDeviceCoordinateSourceText = GetCoordinateSourceText(detail);
+        SelectedDeviceCoordinateStatusText = BuildCoordinateStatusText(detail, selectedDeviceProjection);
+        SelectedDeviceCoordinateRemarkText = BuildCoordinateRemarkText(detail, selectedDeviceProjection);
         SelectedDeviceRecentInspectText = BuildRecentInspectText();
         var latestAbnormal = GetLatestSelectedDeviceAbnormalItem();
         SelectedDeviceAbnormalSummaryText = latestAbnormal?.SummaryText ?? "异常池暂无该点位记录";
@@ -759,16 +770,20 @@ public sealed partial class PreviewPageViewModel(
     {
         SelectedDeviceDirectoryPathText = "暂无";
         SelectedDeviceOnlineStatusText = "暂无";
-        SelectedDeviceLatitudeText = "未定位";
-        SelectedDeviceLongitudeText = "未定位";
+        SelectedDeviceLatitudeText = "无";
+        SelectedDeviceLongitudeText = "无";
+        SelectedDeviceRawCoordinateText = "无";
+        SelectedDeviceMapCoordinateText = "无";
         SelectedDeviceLocationText = "暂无";
-        SelectedDeviceCoordinateSourceText = "无平台坐标";
-        SelectedDeviceMapCoordinateUsageText = "暂无";
+        SelectedDeviceCoordinateSourceText = "无";
+        SelectedDeviceCoordinateStatusText = "平台未提供坐标";
+        SelectedDeviceCoordinateRemarkText = "平台未提供坐标，当前不进入上图。";
         SelectedDeviceRecentInspectText = "暂无最近巡检记录";
         SelectedDeviceAbnormalSummaryText = "异常池暂无该点位记录";
         SelectedDeviceHandleStatusText = "暂无";
         SelectedDeviceRecoveredStatusText = "暂无";
         SelectedDeviceAbnormalPoolText = "异常池暂无该点位记录";
+        selectedDeviceProjection = null;
         ApplySelectedDeviceMaintenance(null);
     }
 
@@ -884,9 +899,10 @@ public sealed partial class PreviewPageViewModel(
         var abnormal = GetLatestSelectedDeviceAbnormalItem();
         var maintenance = GetSelectedDeviceMaintenance();
         logger.LogInformation(
-            "Point detail load completed for {DeviceCode}. HasCoordinate={HasCoordinate}, HasLocation={HasLocation}, HasAbnormal={HasAbnormal}, HasMaintenance={HasMaintenance}.",
+            "Point detail load completed for {DeviceCode}. CoordinateSource={CoordinateSource}, CoordinateStatus={CoordinateStatus}, HasLocation={HasLocation}, HasAbnormal={HasAbnormal}, HasMaintenance={HasMaintenance}.",
             device.DeviceCode,
-            HasPlatformCoordinate(detail),
+            detail?.CoordinateSource ?? "none",
+            selectedDeviceProjection?.CoordinateState ?? detail?.CoordinateStatus ?? "none",
             !string.IsNullOrWhiteSpace(detail?.Location),
             abnormal is not null,
             maintenance is not null);
@@ -894,8 +910,76 @@ public sealed partial class PreviewPageViewModel(
 
     private static bool HasPlatformCoordinate(InspectionDevice? detail)
     {
-        return !string.IsNullOrWhiteSpace(detail?.Latitude)
-            && !string.IsNullOrWhiteSpace(detail?.Longitude);
+        return !string.IsNullOrWhiteSpace(detail?.RawLatitude)
+            && !string.IsNullOrWhiteSpace(detail?.RawLongitude);
+    }
+
+    private async Task LoadSelectedDeviceDetailAsync(string deviceCode, int loadVersion)
+    {
+        var result = await previewService.LoadDeviceDetailAsync(deviceCode, CancellationToken.None);
+        if (loadVersion != selectedDeviceDetailLoadVersion
+            || SelectedDevice is null
+            || !string.Equals(SelectedDevice.DeviceCode, deviceCode, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (!result.Success || result.Device is null)
+        {
+            logger.LogWarning("Point detail coordinate refresh failed for {DeviceCode}. Message={Message}.", deviceCode, result.Message);
+            selectedDeviceProjection = result.Projection;
+            RefreshSelectedDeviceDetailSummary();
+            return;
+        }
+
+        deviceDetailsByCode = new Dictionary<string, InspectionDevice>(deviceDetailsByCode, StringComparer.OrdinalIgnoreCase)
+        {
+            [result.Device.DeviceCode] = result.Device
+        };
+        selectedDeviceProjection = result.Projection;
+        RefreshSelectedDeviceDetailSummary();
+        LogSelectedDeviceDetailCompleted(SelectedDevice);
+    }
+
+    private static string GetCoordinateSourceText(InspectionDevice? detail)
+    {
+        return string.Equals(detail?.CoordinateSource, "platform", StringComparison.OrdinalIgnoreCase)
+            ? "平台"
+            : "无";
+    }
+
+    private static string BuildMapCoordinateText(CoordinateProjectionResult? projection)
+    {
+        return projection?.HasMapCoordinate == true
+            ? $"{projection.MapLatitude} / {projection.MapLongitude}"
+            : "无";
+    }
+
+    private static string BuildCoordinateStatusText(InspectionDevice? detail, CoordinateProjectionResult? projection)
+    {
+        if (projection is not null && !string.IsNullOrWhiteSpace(projection.CoordinateStateText))
+        {
+            return projection.CoordinateStateText;
+        }
+
+        return detail?.CoordinateStatus switch
+        {
+            "available" => "已获取平台原始坐标",
+            "lookup_failed" => "平台坐标读取失败，需人工确认",
+            _ => "平台未提供坐标"
+        };
+    }
+
+    private static string BuildCoordinateRemarkText(InspectionDevice? detail, CoordinateProjectionResult? projection)
+    {
+        if (projection is not null && !string.IsNullOrWhiteSpace(projection.CoordinateWarning))
+        {
+            return projection.CoordinateWarning;
+        }
+
+        return !string.IsNullOrWhiteSpace(detail?.CoordinateStatusMessage)
+            ? detail.CoordinateStatusMessage
+            : "平台未提供坐标，当前不进入上图。";
     }
 
     private void ApplyDirectorySummary(PreviewDeviceLoadResult result)

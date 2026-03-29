@@ -126,6 +126,100 @@ public sealed class PreviewServiceTests
     }
 
     [Fact]
+    public async Task LoadDeviceDetailAsync_ReturnsProjectedMapCoordinate_WhenPlatformCoordinateExists()
+    {
+        var coordinateService = new StubDeviceCoordinateService
+        {
+            SingleResult = new InspectionDevice(
+                "dev-001",
+                "测试设备",
+                "group-001",
+                "31.2304",
+                "121.4737",
+                "上海",
+                1,
+                1,
+                1,
+                0,
+                DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"),
+                "platform",
+                "available",
+                "平台原始坐标来自 getDeviceInfoByDeviceCode。")
+        };
+        var projectionService = new StubCoordinateProjectionService
+        {
+            Results = new Dictionary<string, CoordinateProjectionResult>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["dev-001"] = new(
+                    "dev-001",
+                    true,
+                    true,
+                    "converted",
+                    "已转换为高德",
+                    "地图 marker 仅使用转换后的高德坐标。",
+                    "31.224361",
+                    "121.469170")
+            }
+        };
+        var service = CreateService(coordinateService: coordinateService, projectionService: projectionService);
+
+        var result = await service.LoadDeviceDetailAsync("dev-001", CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Device);
+        Assert.NotNull(result.Projection);
+        Assert.Equal("platform", result.Device!.CoordinateSource);
+        Assert.Equal("31.224361", result.Projection!.MapLatitude);
+        Assert.Equal("121.469170", result.Projection.MapLongitude);
+    }
+
+    [Fact]
+    public async Task LoadDeviceDetailAsync_ReturnsMissingProjection_WhenPlatformCoordinateIsEmpty()
+    {
+        var coordinateService = new StubDeviceCoordinateService
+        {
+            SingleResult = new InspectionDevice(
+                "dev-001",
+                "测试设备",
+                "group-001",
+                null,
+                null,
+                "上海",
+                1,
+                1,
+                1,
+                0,
+                DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"),
+                "none",
+                "missing",
+                "平台未提供坐标。")
+        };
+        var projectionService = new StubCoordinateProjectionService
+        {
+            Results = new Dictionary<string, CoordinateProjectionResult>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["dev-001"] = new(
+                    "dev-001",
+                    false,
+                    false,
+                    "missing",
+                    "平台未提供坐标",
+                    "平台未提供坐标，当前不进入上图。",
+                    null,
+                    null)
+            }
+        };
+        var service = CreateService(coordinateService: coordinateService, projectionService: projectionService);
+
+        var result = await service.LoadDeviceDetailAsync("dev-001", CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Projection);
+        Assert.Equal("missing", result.Projection!.CoordinateState);
+        Assert.False(result.Projection.HasMapCoordinate);
+    }
+
+    [Fact]
     public async Task PrepareAsync_ReturnsOfflineDiagnosis_WithoutRequestingPreviewUrl()
     {
         var client = new StubOpenPlatformClient
@@ -486,13 +580,79 @@ public sealed class PreviewServiceTests
     private static PreviewService CreateService(
         StubOpenPlatformClient? client = null,
         StubGroupSyncStore? groupStore = null,
-        StubPlayProbe? probe = null)
+        StubPlayProbe? probe = null,
+        StubDeviceCoordinateService? coordinateService = null,
+        StubCoordinateProjectionService? projectionService = null)
     {
         return new PreviewService(
             groupStore ?? new StubGroupSyncStore(),
+            coordinateService ?? new StubDeviceCoordinateService(),
+            projectionService ?? new StubCoordinateProjectionService(),
             client ?? new StubOpenPlatformClient(),
             probe ?? new StubPlayProbe(),
             NullLogger<PreviewService>.Instance);
+    }
+
+    private sealed class StubDeviceCoordinateService : IDeviceCoordinateService
+    {
+        public InspectionDevice? SingleResult { get; set; } = new(
+            "dev-001",
+            "测试设备",
+            "group-001",
+            "31.2304",
+            "121.4737",
+            "上海",
+            1,
+            1,
+            1,
+            0,
+            DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"),
+            "platform",
+            "available",
+            "平台原始坐标来自 getDeviceInfoByDeviceCode。");
+
+        public Task<IReadOnlyList<InspectionDevice>> RefreshPlatformCoordinatesAsync(
+            IReadOnlyList<InspectionDevice> devices,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult(devices);
+        }
+
+        public Task<InspectionDevice?> RefreshPlatformCoordinatesAsync(
+            string deviceCode,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult(SingleResult);
+        }
+    }
+
+    private sealed class StubCoordinateProjectionService : ICoordinateProjectionService
+    {
+        public IReadOnlyDictionary<string, CoordinateProjectionResult>? Results { get; set; }
+
+        public Task<IReadOnlyDictionary<string, CoordinateProjectionResult>> ProjectBd09ToGcj02Async(
+            IReadOnlyCollection<CoordinateProjectionRequest> requests,
+            CancellationToken cancellationToken)
+        {
+            if (Results is not null)
+            {
+                return Task.FromResult(Results);
+            }
+
+            return Task.FromResult<IReadOnlyDictionary<string, CoordinateProjectionResult>>(
+                requests.ToDictionary(
+                    item => item.DeviceCode,
+                    item => new CoordinateProjectionResult(
+                        item.DeviceCode,
+                        !string.IsNullOrWhiteSpace(item.RawLatitude) && !string.IsNullOrWhiteSpace(item.RawLongitude),
+                        !string.IsNullOrWhiteSpace(item.RawLatitude) && !string.IsNullOrWhiteSpace(item.RawLongitude),
+                        !string.IsNullOrWhiteSpace(item.RawLatitude) && !string.IsNullOrWhiteSpace(item.RawLongitude) ? "converted" : "missing",
+                        !string.IsNullOrWhiteSpace(item.RawLatitude) && !string.IsNullOrWhiteSpace(item.RawLongitude) ? "已转换为高德" : "平台未提供坐标",
+                        !string.IsNullOrWhiteSpace(item.RawLatitude) && !string.IsNullOrWhiteSpace(item.RawLongitude) ? "地图 marker 仅使用转换后的高德坐标。" : "平台未提供坐标，当前不进入上图。",
+                        item.RawLatitude,
+                        item.RawLongitude),
+                    StringComparer.OrdinalIgnoreCase));
+        }
     }
 
     private sealed class StubOpenPlatformClient : IOpenPlatformClient
@@ -545,6 +705,14 @@ public sealed class PreviewServiceTests
                 Payload = new OpenPlatformDeviceStatusPayload("dev-001", 1)
             };
 
+        public OpenPlatformCallResult<OpenPlatformDeviceInfoPayload> DeviceInfoByCodeResult { get; set; } =
+            new()
+            {
+                Success = true,
+                EndpointName = "getDeviceInfoByDeviceCode",
+                Payload = new OpenPlatformDeviceInfoPayload("dev-001", "测试设备", "31.2304", "121.4737", "上海")
+            };
+
         public OpenPlatformCallResult<OpenPlatformPreviewUrlPayload> PreviewUrlResult { get; set; } =
             new()
             {
@@ -582,6 +750,13 @@ public sealed class PreviewServiceTests
         public Task<OpenPlatformCallResult<OpenPlatformDeviceStatusPayload>> GetDeviceStatusAsync(string deviceCode, CancellationToken cancellationToken)
         {
             return Task.FromResult(DeviceStatusResult);
+        }
+
+        public Task<OpenPlatformCallResult<OpenPlatformDeviceInfoPayload>> GetDeviceInfoByDeviceCodeAsync(
+            string deviceCode,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult(DeviceInfoByCodeResult);
         }
 
         public Task<OpenPlatformCallResult<OpenPlatformPreviewUrlPayload>> GetDevicePreviewUrlAsync(string deviceCode, CancellationToken cancellationToken)
@@ -666,6 +841,18 @@ public sealed class PreviewServiceTests
                 .Concat(devices)
                 .ToArray();
             Devices = updated;
+            return Task.CompletedTask;
+        }
+
+        public Task UpdateDevicePlatformDataAsync(IReadOnlyCollection<InspectionDevice> devices, CancellationToken cancellationToken)
+        {
+            var byCode = Devices.ToDictionary(device => device.DeviceCode, StringComparer.OrdinalIgnoreCase);
+            foreach (var device in devices)
+            {
+                byCode[device.DeviceCode] = device;
+            }
+
+            Devices = byCode.Values.ToArray();
             return Task.CompletedTask;
         }
 

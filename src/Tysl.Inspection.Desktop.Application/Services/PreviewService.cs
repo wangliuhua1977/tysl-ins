@@ -7,6 +7,8 @@ namespace Tysl.Inspection.Desktop.Application.Services;
 
 public sealed class PreviewService(
     IGroupSyncStore groupSyncStore,
+    IDeviceCoordinateService deviceCoordinateService,
+    ICoordinateProjectionService coordinateProjectionService,
     IOpenPlatformClient openPlatformClient,
     IPlayProbe playProbe,
     ILogger<PreviewService> logger) : IPreviewService
@@ -114,6 +116,45 @@ public sealed class PreviewService(
                 0,
                 GroupSyncSnapshotMetadata.Empty,
                 null);
+        }
+    }
+
+    public async Task<PreviewDeviceDetailResult> LoadDeviceDetailAsync(string deviceCode, CancellationToken cancellationToken)
+    {
+        logger.LogInformation("Point detail coordinate load started for {DeviceCode}.", deviceCode);
+
+        try
+        {
+            var refreshedDevice = await deviceCoordinateService.RefreshPlatformCoordinatesAsync(deviceCode, cancellationToken);
+            if (refreshedDevice is null)
+            {
+                logger.LogWarning("Point detail coordinate load aborted because local device {DeviceCode} was not found.", deviceCode);
+                return new PreviewDeviceDetailResult(false, "当前点位不存在，请先完成同步。", null, null);
+            }
+
+            var projections = await coordinateProjectionService.ProjectBd09ToGcj02Async(
+                [
+                    new CoordinateProjectionRequest(
+                        refreshedDevice.DeviceCode,
+                        refreshedDevice.DeviceName,
+                        refreshedDevice.RawLatitude,
+                        refreshedDevice.RawLongitude)
+                ],
+                cancellationToken);
+
+            projections.TryGetValue(refreshedDevice.DeviceCode, out var projection);
+            logger.LogInformation(
+                "Point detail coordinate load completed for {DeviceCode}. CoordinateStatus={CoordinateStatus}, ProjectionState={ProjectionState}.",
+                refreshedDevice.DeviceCode,
+                refreshedDevice.CoordinateStatus,
+                projection?.CoordinateState ?? "none");
+
+            return new PreviewDeviceDetailResult(true, string.Empty, refreshedDevice, projection);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Point detail coordinate load failed for {DeviceCode}.", deviceCode);
+            return new PreviewDeviceDetailResult(false, BuildSqliteMessage(exception), null, null);
         }
     }
 

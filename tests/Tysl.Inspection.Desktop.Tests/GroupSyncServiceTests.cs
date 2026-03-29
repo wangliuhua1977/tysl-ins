@@ -364,6 +364,18 @@ public sealed class GroupSyncServiceTests
             return Task.FromResult(RegionDeviceCountResult);
         }
 
+        public Task<OpenPlatformCallResult<OpenPlatformDeviceInfoPayload>> GetDeviceInfoByDeviceCodeAsync(
+            string deviceCode,
+            CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new OpenPlatformCallResult<OpenPlatformDeviceInfoPayload>
+            {
+                Success = true,
+                EndpointName = "getDeviceInfoByDeviceCode",
+                Payload = new OpenPlatformDeviceInfoPayload(deviceCode, string.Empty, null, null, null)
+            });
+        }
+
         public Task<OpenPlatformCallResult<OpenPlatformDeviceStatusPayload>> GetDeviceStatusAsync(string deviceCode, CancellationToken cancellationToken)
         {
             return Task.FromResult(new OpenPlatformCallResult<OpenPlatformDeviceStatusPayload>
@@ -423,6 +435,20 @@ public sealed class GroupSyncServiceTests
         {
             this.devices.RemoveAll(device => string.Equals(device.GroupId, groupId, StringComparison.OrdinalIgnoreCase));
             this.devices.AddRange(devices);
+            return Task.CompletedTask;
+        }
+
+        public Task UpdateDevicePlatformDataAsync(IReadOnlyCollection<InspectionDevice> devices, CancellationToken cancellationToken)
+        {
+            foreach (var device in devices)
+            {
+                var index = this.devices.FindIndex(item => string.Equals(item.DeviceCode, device.DeviceCode, StringComparison.OrdinalIgnoreCase));
+                if (index >= 0)
+                {
+                    this.devices[index] = device;
+                }
+            }
+
             return Task.CompletedTask;
         }
 

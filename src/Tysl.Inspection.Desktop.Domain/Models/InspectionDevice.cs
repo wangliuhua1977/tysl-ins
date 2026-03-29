@@ -11,7 +11,15 @@ public sealed record InspectionDevice(
     int? CloudStatus,
     int? BandStatus,
     int? SourceTypeFlag,
-    DateTimeOffset SyncedAt);
+    DateTimeOffset SyncedAt,
+    string CoordinateSource = "",
+    string CoordinateStatus = "",
+    string CoordinateStatusMessage = "")
+{
+    public string? RawLatitude => Latitude;
+
+    public string? RawLongitude => Longitude;
+}
 
 public sealed record DeviceUserMaintenance(
     string DeviceCode,

@@ -391,7 +391,7 @@
 
         function buildUnlocatedReason(point) {
             if (!point.hasRawCoordinate) {
-                return "无坐标";
+                return "平台未提供坐标";
             }
 
             return point.coordinateState === "failed"
@@ -410,7 +410,7 @@
             const failedCount = unlocated.filter((point) => point.coordinateState === "failed").length;
             const missingCount = unlocated.filter((point) => !point.hasRawCoordinate).length;
             unlocatedSummaryEl.textContent = failedCount > 0
-                ? `共 ${unlocated.length} 个未上图点位，其中 ${failedCount} 个坐标转换失败、${missingCount} 个无坐标。`
+                ? `共 ${unlocated.length} 个未上图点位，其中 ${failedCount} 个坐标转换失败、${missingCount} 个平台未提供坐标。`
                 : `共 ${unlocated.length} 个未定位点位。`;
             unlocatedListEl.innerHTML = unlocated.map((point) => {
                 const location = readLocation(point);
@@ -509,8 +509,8 @@
             if (!point.hasRawCoordinate) {
                 return Object.assign({}, point, {
                     coordinateState: "missing",
-                    coordinateStateText: "无坐标",
-                    coordinateWarning: "当前无平台坐标，无法执行百度转高德。",
+                    coordinateStateText: "平台未提供坐标",
+                    coordinateWarning: "平台未提供坐标，当前不进入上图。",
                     hasMapCoordinate: false,
                     mapLatitude: "",
                     mapLongitude: ""
@@ -684,9 +684,11 @@
 
             try {
                 await ensureMapScript(mapCfg);
-                const convertedPoints = await convertPoints(points, mapCfg);
-                updateSummary(convertedPoints);
-                renderMap(convertedPoints);
+                const resolvedPoints = mapCfg.pointsPreconverted
+                    ? points
+                    : await convertPoints(points, mapCfg);
+                updateSummary(resolvedPoints);
+                renderMap(resolvedPoints);
             } catch (error) {
                 const message = error && error.message
                     ? error.message

@@ -642,6 +642,8 @@ public sealed class PreviewPageViewModelTests
         public PreviewDeviceMaintenanceSaveResult SaveDeviceMaintenanceResult { get; set; } =
             new(true, "用户维护信息已保存。", null);
 
+        public PreviewDeviceDetailResult? LoadDeviceDetailResult { get; set; }
+
         public string? SavedDeviceCode { get; private set; }
 
         public Task<PreviewDeviceLoadResult> LoadLocalDevicesAsync(CancellationToken cancellationToken)
@@ -652,6 +654,21 @@ public sealed class PreviewPageViewModelTests
         public Task<PreviewPrepareResult> PrepareAsync(string deviceCode, CancellationToken cancellationToken)
         {
             return Task.FromResult(PrepareResult);
+        }
+
+        public Task<PreviewDeviceDetailResult> LoadDeviceDetailAsync(string deviceCode, CancellationToken cancellationToken)
+        {
+            if (LoadDeviceDetailResult is not null)
+            {
+                return Task.FromResult(LoadDeviceDetailResult);
+            }
+
+            LoadResult.DeviceDetailsByCode.TryGetValue(deviceCode, out var detail);
+            return Task.FromResult(new PreviewDeviceDetailResult(
+                detail is not null,
+                detail is null ? "当前点位不存在，请先完成同步。" : string.Empty,
+                detail,
+                null));
         }
 
         public Task<InspectResult> InspectAsync(string deviceCode, CancellationToken cancellationToken)

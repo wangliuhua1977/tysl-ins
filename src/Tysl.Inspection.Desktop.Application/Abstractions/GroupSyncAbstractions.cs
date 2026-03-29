@@ -24,6 +24,10 @@ public interface IGroupSyncStore
         IReadOnlyCollection<InspectionDevice> devices,
         CancellationToken cancellationToken);
 
+    Task UpdateDevicePlatformDataAsync(
+        IReadOnlyCollection<InspectionDevice> devices,
+        CancellationToken cancellationToken);
+
     Task<OverviewStats> GetOverviewStatsAsync(CancellationToken cancellationToken);
 
     Task<IReadOnlyList<InspectionGroup>> GetGroupsAsync(CancellationToken cancellationToken);
@@ -59,9 +63,29 @@ public interface IMapService
     Task<MapLoadResult> LoadAsync(CancellationToken cancellationToken);
 }
 
+public interface IDeviceCoordinateService
+{
+    Task<IReadOnlyList<InspectionDevice>> RefreshPlatformCoordinatesAsync(
+        IReadOnlyList<InspectionDevice> devices,
+        CancellationToken cancellationToken);
+
+    Task<InspectionDevice?> RefreshPlatformCoordinatesAsync(
+        string deviceCode,
+        CancellationToken cancellationToken);
+}
+
+public interface ICoordinateProjectionService
+{
+    Task<IReadOnlyDictionary<string, CoordinateProjectionResult>> ProjectBd09ToGcj02Async(
+        IReadOnlyCollection<CoordinateProjectionRequest> requests,
+        CancellationToken cancellationToken);
+}
+
 public interface IPreviewService
 {
     Task<PreviewDeviceLoadResult> LoadLocalDevicesAsync(CancellationToken cancellationToken);
+
+    Task<PreviewDeviceDetailResult> LoadDeviceDetailAsync(string deviceCode, CancellationToken cancellationToken);
 
     Task<PreviewPrepareResult> PrepareAsync(string deviceCode, CancellationToken cancellationToken);
 
@@ -107,7 +131,27 @@ public interface IPlayProbe
 public sealed record MapLoadResult(
     bool Success,
     string Message,
-    IReadOnlyList<InspectionDevice> Devices);
+    IReadOnlyList<InspectionDevice> Devices)
+{
+    public IReadOnlyDictionary<string, CoordinateProjectionResult> ProjectionByDeviceCode { get; init; }
+        = new Dictionary<string, CoordinateProjectionResult>(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed record CoordinateProjectionRequest(
+    string DeviceCode,
+    string DeviceName,
+    string? RawLatitude,
+    string? RawLongitude);
+
+public sealed record CoordinateProjectionResult(
+    string DeviceCode,
+    bool HasRawCoordinate,
+    bool HasMapCoordinate,
+    string CoordinateState,
+    string CoordinateStateText,
+    string CoordinateWarning,
+    string? MapLatitude,
+    string? MapLongitude);
 
 public sealed record PreviewDeviceOption(
     string DeviceCode,
@@ -185,6 +229,12 @@ public sealed record PreviewDeviceLoadResult(
     public IReadOnlyDictionary<string, DeviceUserMaintenance> DeviceMaintenanceByCode { get; init; }
         = new Dictionary<string, DeviceUserMaintenance>(StringComparer.OrdinalIgnoreCase);
 }
+
+public sealed record PreviewDeviceDetailResult(
+    bool Success,
+    string Message,
+    InspectionDevice? Device,
+    CoordinateProjectionResult? Projection);
 
 public sealed record PreviewPrepareResult(
     bool Success,

@@ -19,6 +19,7 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
     private const string RegionListPath = "/open/token/device/getReginWithGroupList";
     private const string RegionDeviceListPath = "/open/token/device/getDeviceList";
     private const string RegionDeviceCountPath = "/open/token/vcpTree/getCusDeviceCount";
+    private const string DeviceInfoByCodePath = "/open/token/device/getDeviceInfoByDeviceCode";
     private const string DeviceStatusPath = "/open/token/vpaas/device/getDeviceStatus";
     private const string DevicePreviewPath = "/open/token/cloud/getDeviceMediaUrlRtsp";
 
@@ -161,6 +162,30 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
             path: DeviceStatusPath,
             privateParameters: requestParameters,
             parsePayload: root => ParseDeviceStatus(root, deviceCode),
+            cancellationToken: cancellationToken);
+    }
+
+    public async Task<OpenPlatformCallResult<OpenPlatformDeviceInfoPayload>> GetDeviceInfoByDeviceCodeAsync(
+        string deviceCode,
+        CancellationToken cancellationToken)
+    {
+        var accessTokenResult = await EnsureAccessTokenAsync(cancellationToken);
+        if (!accessTokenResult.Success || accessTokenResult.Payload is null)
+        {
+            return Fail<OpenPlatformDeviceInfoPayload>(
+                "getDeviceInfoByDeviceCode",
+                BuildUrl(DeviceInfoByCodePath),
+                $"accessToken 获取失败：{accessTokenResult.BuildMessage()}");
+        }
+
+        var requestParameters = CreateAuthorizedParameters(accessTokenResult.Payload.AccessToken);
+        requestParameters.Add(new("deviceCode", deviceCode));
+
+        return await SendAsync(
+            endpointName: "getDeviceInfoByDeviceCode",
+            path: DeviceInfoByCodePath,
+            privateParameters: requestParameters,
+            parsePayload: root => ParseDeviceInfo(root, deviceCode),
             cancellationToken: cancellationToken);
     }
 
@@ -758,6 +783,17 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
         var deviceCode = GetString(source, "deviceCode", "deviceId", "code") ?? requestedDeviceCode;
         var onlineStatus = GetInt32(source, "onlineStatus", "deviceStatus", "status", "devStatus");
         return new OpenPlatformDeviceStatusPayload(deviceCode, onlineStatus);
+    }
+
+    private static OpenPlatformDeviceInfoPayload ParseDeviceInfo(JsonElement root, string requestedDeviceCode)
+    {
+        var source = UnwrapPayload(root, requestedDeviceCode);
+        var deviceCode = GetString(source, "deviceCode") ?? requestedDeviceCode;
+        var deviceName = GetString(source, "deviceName") ?? string.Empty;
+        var latitude = GetString(source, "latitude");
+        var longitude = GetString(source, "longitude");
+        var location = GetString(source, "location");
+        return new OpenPlatformDeviceInfoPayload(deviceCode, deviceName, latitude, longitude, location);
     }
 
     private static IReadOnlyList<OpenPlatformRegionDto> ParseRegionList(JsonElement root)

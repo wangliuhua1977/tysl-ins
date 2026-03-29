@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <title>CoordConvHost</title>
+</head>
+<body>
+    <script>
+        function formatCoordinate(value) {
+            return Number(value).toFixed(6);
+        }
+
+        async function ensureMapScript(config) {
+            if (window.AMap) {
+                return;
+            }
+
+            if (!config || !config.jsKey) {
+                throw new Error("缺少高德地图 Key，无法执行坐标转换。");
+            }
+
+            if (config.securityJsCode) {
+                window._AMapSecurityConfig = {
+                    securityJsCode: config.securityJsCode
+                };
+            }
+
+            await new Promise((resolve, reject) => {
+                const script = document.createElement("script");
+                script.src = `https://webapi.amap.com/maps?v=${encodeURIComponent(config.jsApiVersion || "2.0")}&key=${encodeURIComponent(config.jsKey)}`;
+                script.onload = () => resolve();
+                script.onerror = () => reject(new Error("高德地图脚本加载失败，请检查 Key 配置或网络连接。"));
+                document.head.appendChild(script);
+            });
+        }
+
+        function resolveConvertedLocation(result) {
+            const location = Array.isArray(result?.locations)
+                ? result.locations[0]
+                : result?.locations || result;
+
+            if (!location) {
+                throw new Error("高德坐标转换未返回结果。");
+            }
+
+            const lng = typeof location.getLng === "function"
+                ? location.getLng()
+                : Array.isArray(location)
+                    ? location[0]
+                    : location.lng;
+            const lat = typeof location.getLat === "function"
+                ? location.getLat()
+                : Array.isArray(location)
+                    ? location[1]
+                    : location.lat;
+
+            if (!Number.isFinite(Number(lng)) || !Number.isFinite(Number(lat))) {
+                throw new Error("高德坐标转换结果无效。");
+            }
+
+            return {
+                lng: formatCoordinate(lng),
+                lat: formatCoordinate(lat)
+            };
+        }
+
+        async function convertPoint(point, rawCoordinateSystem) {
+            if (!point.hasRawCoordinate) {
+                return Object.assign({}, point, {
+                    coordinateState: "missing",
+                    coordinateStateText: "平台未提供坐标",
+                    coordinateWarning: "平台未提供坐标，当前不进入上图。",
+                    hasMapCoordinate: false,
+                    mapLatitude: null,
+                    mapLongitude: null
+                });
+            }
+
+            if (!window.AMap || typeof window.AMap.convertFrom !== "function") {
+                return Object.assign({}, point, {
+                    coordinateState: "failed",
+                    coordinateStateText: "坐标转换失败，需人工确认",
+                    coordinateWarning: "高德地图坐标转换能力不可用，需人工确认。",
+                    hasMapCoordinate: false,
+                    mapLatitude: null,
+                    mapLongitude: null
+                });
+            }
+
+            return await new Promise((resolve) => {
+                const lng = Number(point.rawLongitude);
+                const lat = Number(point.rawLatitude);
+
+                window.AMap.convertFrom([lng, lat], rawCoordinateSystem || "baidu", (status, result) => {
+                    if (status !== "complete") {
+                        resolve(Object.assign({}, point, {
+                            coordinateState: "failed",
+                            coordinateStateText: "坐标转换失败，需人工确认",
+                            coordinateWarning: "高德坐标转换未完成，需人工确认。",
+                            hasMapCoordinate: false,
+                            mapLatitude: null,
+                            mapLongitude: null
+                        }));
+                        return;
+                    }
+
+                    try {
+                        const converted = resolveConvertedLocation(result);
+                        resolve(Object.assign({}, point, {
+                            coordinateState: "converted",
+                            coordinateStateText: "已转换为高德",
+                            coordinateWarning: "地图 marker 仅使用转换后的高德坐标。",
+                            hasMapCoordinate: true,
+                            mapLatitude: converted.lat,
+                            mapLongitude: converted.lng
+                        }));
+                    } catch (error) {
+                        resolve(Object.assign({}, point, {
+                            coordinateState: "failed",
+                            coordinateStateText: "坐标转换失败，需人工确认",
+                            coordinateWarning: error && error.message
+                                ? error.message
+                                : "高德坐标转换结果无效，需人工确认。",
+                            hasMapCoordinate: false,
+                            mapLatitude: null,
+                            mapLongitude: null
+                        }));
+                    }
+                });
+            });
+        }
+
+        window.coordConv = {
+            async convertBatch(points, config) {
+                const safePoints = Array.isArray(points) ? points : [];
+                if (safePoints.some((point) => point.hasRawCoordinate)) {
+                    await ensureMapScript(config || {});
+                }
+
+                return await Promise.all(
+                    safePoints.map((point) => convertPoint(point, config?.rawCoordinateSystem || "baidu"))
+                );
+            }
+        };
+    </script>
+</body>
+</html>

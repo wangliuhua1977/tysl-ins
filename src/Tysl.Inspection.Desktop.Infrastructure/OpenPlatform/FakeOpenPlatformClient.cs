@@ -39,6 +39,14 @@ public sealed class FakeOpenPlatformClient : IOpenPlatformClient
         new("R-002", 0, 0)
     ];
 
+    private static readonly IReadOnlyDictionary<string, OpenPlatformDeviceInfoPayload> DeviceInfoByCode =
+        new Dictionary<string, OpenPlatformDeviceInfoPayload>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["dev-001"] = new("dev-001", "离线设备 1", "31.2304", "121.4737", "上海"),
+            ["dev-002"] = new("dev-002", "离线设备 2", null, null, "平台未提供坐标"),
+            ["dev-003"] = new("dev-003", "离线设备 3", "30.2741", "120.1551", "杭州")
+        };
+
     public Task<OpenPlatformCallResult<OpenPlatformAccessTokenPayload>> GetAccessTokenAsync(CancellationToken cancellationToken)
     {
         var requestedAt = DateTimeOffset.UtcNow;
@@ -139,6 +147,23 @@ public sealed class FakeOpenPlatformClient : IOpenPlatformClient
             EndpointName = "getDeviceStatus",
             RequestUrl = "fake://getDeviceStatus",
             Payload = new OpenPlatformDeviceStatusPayload(deviceCode, status)
+        });
+    }
+
+    public Task<OpenPlatformCallResult<OpenPlatformDeviceInfoPayload>> GetDeviceInfoByDeviceCodeAsync(
+        string deviceCode,
+        CancellationToken cancellationToken)
+    {
+        var payload = DeviceInfoByCode.TryGetValue(deviceCode, out var value)
+            ? value
+            : new OpenPlatformDeviceInfoPayload(deviceCode, string.Empty, null, null, null);
+
+        return Task.FromResult(new OpenPlatformCallResult<OpenPlatformDeviceInfoPayload>
+        {
+            Success = true,
+            EndpointName = "getDeviceInfoByDeviceCode",
+            RequestUrl = "fake://getDeviceInfoByDeviceCode",
+            Payload = payload
         });
     }
 

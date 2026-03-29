@@ -153,6 +153,7 @@ public partial class App : System.Windows.Application
                 services.AddSingleton<ThemeSettingsPageViewModel>();
                 services.AddSingleton<IPlayProbe, PlayProbeSvc>();
                 services.AddSingleton<IPlayWinSvc, PlayWinSvc>();
+                services.AddSingleton<ICoordinateProjectionService, AmapCoordProjector>();
                 services.AddTransient<VlcPlaySvc>();
             })
             .Build();

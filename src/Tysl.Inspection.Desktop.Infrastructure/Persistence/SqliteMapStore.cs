@@ -22,9 +22,12 @@ public sealed class SqliteMapStore(
                 deviceCode,
                 deviceName,
                 groupId,
-                latitude,
-                longitude,
+                rawLatitude,
+                rawLongitude,
                 location,
+                coordinateSource,
+                coordinateStatus,
+                coordinateStatusMessage,
                 onlineStatus,
                 cloudStatus,
                 bandStatus,
@@ -46,11 +49,14 @@ public sealed class SqliteMapStore(
                 ReadNullableString(reader, 3),
                 ReadNullableString(reader, 4),
                 ReadNullableString(reader, 5),
-                ReadNullableInt32(reader, 6),
-                ReadNullableInt32(reader, 7),
-                ReadNullableInt32(reader, 8),
                 ReadNullableInt32(reader, 9),
-                ReadSyncedAt(reader, 10)));
+                ReadNullableInt32(reader, 10),
+                ReadNullableInt32(reader, 11),
+                ReadNullableInt32(reader, 12),
+                ReadSyncedAt(reader, 13),
+                ReadString(reader, 6),
+                ReadString(reader, 7),
+                ReadString(reader, 8)));
         }
 
         return devices;

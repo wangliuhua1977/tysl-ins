@@ -38,7 +38,12 @@ public sealed class SqliteBootstrapper(
                 groupId TEXT NOT NULL,
                 latitude TEXT NULL,
                 longitude TEXT NULL,
+                rawLatitude TEXT NULL,
+                rawLongitude TEXT NULL,
                 location TEXT NULL,
+                coordinateSource TEXT NOT NULL DEFAULT '',
+                coordinateStatus TEXT NOT NULL DEFAULT '',
+                coordinateStatusMessage TEXT NOT NULL DEFAULT '',
                 onlineStatus INTEGER NULL,
                 cloudStatus INTEGER NULL,
                 bandStatus INTEGER NULL,
@@ -99,6 +104,7 @@ public sealed class SqliteBootstrapper(
         await command.ExecuteNonQueryAsync(cancellationToken);
 
         await EnsureGroupColumnsAsync(connection, cancellationToken);
+        await EnsureDeviceColumnsAsync(connection, cancellationToken);
         await EnsureSyncMetadataAsync(connection, cancellationToken);
         await EnsureInspectAbnormalPoolColumnsAsync(connection, cancellationToken);
         await EnsureIndexesAsync(connection, cancellationToken);
@@ -246,6 +252,70 @@ public sealed class SqliteBootstrapper(
                 ELSE reconciliationScopeText
             END
             WHERE id = 1;
+            """,
+            cancellationToken);
+    }
+
+    private static async Task EnsureDeviceColumnsAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        var columns = await LoadColumnsAsync(connection, "Device", cancellationToken);
+
+        if (!columns.Contains("rawLatitude"))
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                """ALTER TABLE Device ADD COLUMN rawLatitude TEXT NULL;""",
+                cancellationToken);
+        }
+
+        if (!columns.Contains("rawLongitude"))
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                """ALTER TABLE Device ADD COLUMN rawLongitude TEXT NULL;""",
+                cancellationToken);
+        }
+
+        if (!columns.Contains("coordinateSource"))
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                """ALTER TABLE Device ADD COLUMN coordinateSource TEXT NOT NULL DEFAULT '';""",
+                cancellationToken);
+        }
+
+        if (!columns.Contains("coordinateStatus"))
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                """ALTER TABLE Device ADD COLUMN coordinateStatus TEXT NOT NULL DEFAULT '';""",
+                cancellationToken);
+        }
+
+        if (!columns.Contains("coordinateStatusMessage"))
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                """ALTER TABLE Device ADD COLUMN coordinateStatusMessage TEXT NOT NULL DEFAULT '';""",
+                cancellationToken);
+        }
+
+        await ExecuteNonQueryAsync(
+            connection,
+            """
+            UPDATE Device
+            SET coordinateSource = CASE
+                WHEN coordinateSource IS NULL THEN ''
+                ELSE coordinateSource
+            END,
+                coordinateStatus = CASE
+                    WHEN coordinateStatus IS NULL THEN ''
+                    ELSE coordinateStatus
+                END,
+                coordinateStatusMessage = CASE
+                    WHEN coordinateStatusMessage IS NULL THEN ''
+                    ELSE coordinateStatusMessage
+                END;
             """,
             cancellationToken);
     }
