@@ -6,6 +6,7 @@ namespace Tysl.Inspection.Desktop.Application.Services;
 
 public sealed class MapService(
     IMapStore mapStore,
+    IGroupSyncStore groupSyncStore,
     IDeviceCoordinateService deviceCoordinateService,
     ICoordinateProjectionService coordinateProjectionService,
     ILogger<MapService> logger) : IMapService
@@ -15,28 +16,49 @@ public sealed class MapService(
         try
         {
             var devices = await mapStore.GetDevicesAsync(cancellationToken);
-            var refreshedDevices = await deviceCoordinateService.RefreshPlatformCoordinatesAsync(devices, cancellationToken);
+            var resolvedDevices = await deviceCoordinateService.RefreshPlatformCoordinatesAsync(devices, cancellationToken);
             var projections = await coordinateProjectionService.ProjectBd09ToGcj02Async(
-                refreshedDevices
+                resolvedDevices
                     .Select(device => new CoordinateProjectionRequest(
                         device.DeviceCode,
                         device.DeviceName,
                         device.RawLatitude,
-                        device.RawLongitude))
+                        device.RawLongitude,
+                        device.MapLatitude,
+                        device.MapLongitude,
+                        device.CoordinateStatus,
+                        device.CoordinateStatusMessage))
                     .ToArray(),
                 cancellationToken);
 
+            var devicesWithProjectionCache = MergeProjectionCache(resolvedDevices, projections);
+            var changedCacheDevices = resolvedDevices
+                .Zip(devicesWithProjectionCache, (original, updated) => (original, updated))
+                .Where(pair => HasProjectionCacheChanged(pair.original, pair.updated))
+                .Select(pair => pair.updated)
+                .ToArray();
+
+            if (changedCacheDevices.Length > 0)
+            {
+                await groupSyncStore.UpdateDevicePlatformDataAsync(changedCacheDevices, cancellationToken);
+                logger.LogInformation(
+                    "Coordinate render cache write completed. DeviceCount={DeviceCount}.",
+                    changedCacheDevices.Length);
+            }
+
             var renderedCount = projections.Values.Count(result => result.HasMapCoordinate);
-            var missingCount = projections.Values.Count(result => result.CoordinateState == "missing");
-            var failedCount = projections.Values.Count(result => result.CoordinateState == "failed");
+            var missingCount = projections.Values.Count(result => result.CoordinateState == CoordinateStateCatalog.Missing);
+            var rateLimitedCount = projections.Values.Count(result => result.CoordinateState == CoordinateStateCatalog.RateLimited);
+            var failedCount = projections.Values.Count(result => result.CoordinateState == CoordinateStateCatalog.Failed);
 
             logger.LogInformation(
-                "Map render coordinates resolved. RenderedCount={RenderedCount}, MissingCount={MissingCount}, FailedCount={FailedCount}.",
+                "Map coordinate load completed. RenderedCount={RenderedCount}, MissingCount={MissingCount}, RateLimitedCount={RateLimitedCount}, FailedCount={FailedCount}.",
                 renderedCount,
                 missingCount,
+                rateLimitedCount,
                 failedCount);
 
-            return new MapLoadResult(true, string.Empty, refreshedDevices)
+            return new MapLoadResult(true, string.Empty, devicesWithProjectionCache)
             {
                 ProjectionByDeviceCode = projections
             };
@@ -46,6 +68,33 @@ public sealed class MapService(
             logger.LogError(exception, "Unexpected failure while loading map points.");
             return new MapLoadResult(false, BuildSqliteMessage(exception), Array.Empty<InspectionDevice>());
         }
+    }
+
+    private static IReadOnlyList<InspectionDevice> MergeProjectionCache(
+        IReadOnlyList<InspectionDevice> devices,
+        IReadOnlyDictionary<string, CoordinateProjectionResult> projections)
+    {
+        return devices
+            .Select(device =>
+            {
+                if (!projections.TryGetValue(device.DeviceCode, out var projection))
+                {
+                    return device;
+                }
+
+                return device with
+                {
+                    MapLatitude = projection.HasMapCoordinate ? projection.MapLatitude : null,
+                    MapLongitude = projection.HasMapCoordinate ? projection.MapLongitude : null
+                };
+            })
+            .ToArray();
+    }
+
+    private static bool HasProjectionCacheChanged(InspectionDevice original, InspectionDevice updated)
+    {
+        return !string.Equals(original.MapLatitude, updated.MapLatitude, StringComparison.Ordinal)
+               || !string.Equals(original.MapLongitude, updated.MapLongitude, StringComparison.Ordinal);
     }
 
     private static string BuildSqliteMessage(Exception exception)

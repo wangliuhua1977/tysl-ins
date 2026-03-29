@@ -138,18 +138,29 @@ public sealed class PreviewService(
                         refreshedDevice.DeviceCode,
                         refreshedDevice.DeviceName,
                         refreshedDevice.RawLatitude,
-                        refreshedDevice.RawLongitude)
+                        refreshedDevice.RawLongitude,
+                        refreshedDevice.MapLatitude,
+                        refreshedDevice.MapLongitude,
+                        refreshedDevice.CoordinateStatus,
+                        refreshedDevice.CoordinateStatusMessage)
                 ],
                 cancellationToken);
 
             projections.TryGetValue(refreshedDevice.DeviceCode, out var projection);
+            var deviceWithProjectionCache = ApplyProjectionCache(refreshedDevice, projection);
+            if (HasProjectionCacheChanged(refreshedDevice, deviceWithProjectionCache))
+            {
+                await groupSyncStore.UpdateDevicePlatformDataAsync([deviceWithProjectionCache], cancellationToken);
+                logger.LogInformation("Point detail render coordinate cache write completed for {DeviceCode}.", refreshedDevice.DeviceCode);
+            }
+
             logger.LogInformation(
                 "Point detail coordinate load completed for {DeviceCode}. CoordinateStatus={CoordinateStatus}, ProjectionState={ProjectionState}.",
-                refreshedDevice.DeviceCode,
-                refreshedDevice.CoordinateStatus,
+                deviceWithProjectionCache.DeviceCode,
+                deviceWithProjectionCache.CoordinateStatus,
                 projection?.CoordinateState ?? "none");
 
-            return new PreviewDeviceDetailResult(true, string.Empty, refreshedDevice, projection);
+            return new PreviewDeviceDetailResult(true, string.Empty, deviceWithProjectionCache, projection);
         }
         catch (Exception exception)
         {
@@ -749,6 +760,28 @@ public sealed class PreviewService(
         return string.IsNullOrWhiteSpace(value)
             ? string.Empty
             : value.Trim();
+    }
+
+    private static InspectionDevice ApplyProjectionCache(
+        InspectionDevice device,
+        CoordinateProjectionResult? projection)
+    {
+        if (projection is null)
+        {
+            return device;
+        }
+
+        return device with
+        {
+            MapLatitude = projection.HasMapCoordinate ? projection.MapLatitude : null,
+            MapLongitude = projection.HasMapCoordinate ? projection.MapLongitude : null
+        };
+    }
+
+    private static bool HasProjectionCacheChanged(InspectionDevice original, InspectionDevice updated)
+    {
+        return !string.Equals(original.MapLatitude, updated.MapLatitude, StringComparison.Ordinal)
+               || !string.Equals(original.MapLongitude, updated.MapLongitude, StringComparison.Ordinal);
     }
 
     private static string MaskUrl(string? value)

@@ -390,13 +390,19 @@
         }
 
         function buildUnlocatedReason(point) {
-            if (!point.hasRawCoordinate) {
-                return "平台未提供坐标";
+            if (point.coordinateState === "rate_limited") {
+                return "坐标获取限频，稍后重试";
             }
 
-            return point.coordinateState === "failed"
-                ? "坐标转换失败，需人工确认"
-                : coordinateStateText(point);
+            if (point.coordinateState === "failed") {
+                return point.coordinateStateText || "坐标转换失败，需人工确认";
+            }
+
+            if (!point.hasRawCoordinate) {
+                return point.coordinateStateText || "平台未提供坐标";
+            }
+
+            return coordinateStateText(point);
         }
 
         function setUnlocated(points) {
@@ -408,10 +414,17 @@
             }
 
             const failedCount = unlocated.filter((point) => point.coordinateState === "failed").length;
-            const missingCount = unlocated.filter((point) => !point.hasRawCoordinate).length;
-            unlocatedSummaryEl.textContent = failedCount > 0
-                ? `共 ${unlocated.length} 个未上图点位，其中 ${failedCount} 个坐标转换失败、${missingCount} 个平台未提供坐标。`
-                : `共 ${unlocated.length} 个未定位点位。`;
+            const rateLimitedCount = unlocated.filter((point) => point.coordinateState === "rate_limited").length;
+            const missingCount = unlocated.filter((point) => point.coordinateState === "missing").length;
+
+            if (failedCount > 0) {
+                unlocatedSummaryEl.textContent = `共 ${unlocated.length} 个未上图点位，其中 ${failedCount} 个坐标转换失败、${rateLimitedCount} 个坐标获取限频、${missingCount} 个平台未提供坐标。`;
+            } else if (rateLimitedCount > 0) {
+                unlocatedSummaryEl.textContent = `共 ${unlocated.length} 个未上图点位，其中 ${rateLimitedCount} 个坐标获取限频、${missingCount} 个平台未提供坐标。`;
+            } else {
+                unlocatedSummaryEl.textContent = `共 ${unlocated.length} 个未定位点位。`;
+            }
+
             unlocatedListEl.innerHTML = unlocated.map((point) => {
                 const location = readLocation(point);
                 return `
@@ -603,14 +616,19 @@
         function buildStatusText(points) {
             const total = points.length;
             const renderedCount = points.filter((point) => point.hasMapCoordinate).length;
-            const missingCount = points.filter((point) => !point.hasRawCoordinate).length;
+            const missingCount = points.filter((point) => point.coordinateState === "missing").length;
+            const rateLimitedCount = points.filter((point) => point.coordinateState === "rate_limited").length;
             const failedCount = points.filter((point) => point.coordinateState === "failed").length;
 
             if (failedCount > 0) {
-                return `已读取 ${total} 个本地点位，其中 ${renderedCount} 个完成百度转高德并上图，${missingCount} 个无坐标，${failedCount} 个坐标转换失败，需人工确认。`;
+                return `已读取 ${total} 个本地点位，其中 ${renderedCount} 个完成上图，${missingCount} 个平台未提供坐标，${rateLimitedCount} 个坐标获取限频，${failedCount} 个坐标转换失败，需人工确认。`;
             }
 
-            return `已读取 ${total} 个本地点位，其中 ${renderedCount} 个已按百度转高德后上图，${missingCount} 个无坐标。`;
+            if (rateLimitedCount > 0) {
+                return `已读取 ${total} 个本地点位，其中 ${renderedCount} 个完成上图，${missingCount} 个平台未提供坐标，${rateLimitedCount} 个坐标获取限频，稍后重试。`;
+            }
+
+            return `已读取 ${total} 个本地点位，其中 ${renderedCount} 个完成上图，${missingCount} 个平台未提供坐标。`;
         }
 
         function updateSummary(points) {

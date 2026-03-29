@@ -574,6 +574,52 @@ public sealed class PreviewPageViewModelTests
         Assert.Equal("dev-001", previewService.SavedDeviceCode);
     }
 
+    [Fact]
+    public async Task InitializeAsync_ShowsRateLimitedCoordinateStateForSelectedDeviceDetail()
+    {
+        var previewService = new StubPreviewService
+        {
+            LoadDeviceDetailResult = new PreviewDeviceDetailResult(
+                true,
+                string.Empty,
+                new InspectionDevice(
+                    "dev-001",
+                    "测试设备",
+                    "group-001",
+                    null,
+                    null,
+                    "上海",
+                    1,
+                    1,
+                    1,
+                    0,
+                    DateTimeOffset.Parse("2026-03-29T09:45:00+08:00"),
+                    "none",
+                    CoordinateStateCatalog.RateLimited,
+                    "坐标获取限频，稍后重试。"),
+                new CoordinateProjectionResult(
+                    "dev-001",
+                    false,
+                    false,
+                    CoordinateStateCatalog.RateLimited,
+                    "坐标获取限频，稍后重试",
+                    "坐标获取限频，稍后重试。",
+                    null,
+                    null))
+        };
+        var viewModel = new PreviewPageViewModel(
+            previewService,
+            CreateStore(),
+            new StubPlayWinSvc(),
+            NullLogger<PreviewPageViewModel>.Instance);
+
+        await viewModel.InitializeAsync();
+        await Task.Delay(100);
+
+        Assert.Equal("坐标获取限频，稍后重试", viewModel.SelectedDeviceCoordinateStatusText);
+        Assert.Contains("限频", viewModel.SelectedDeviceCoordinateRemarkText);
+    }
+
     [Theory]
     [InlineData(PlayStage.Initializing, "正在初始化播放器")]
     [InlineData(PlayStage.Connecting, "正在建立播放链路")]

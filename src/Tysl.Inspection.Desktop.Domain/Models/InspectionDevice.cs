@@ -19,6 +19,18 @@ public sealed record InspectionDevice(
     public string? RawLatitude => Latitude;
 
     public string? RawLongitude => Longitude;
+
+    public string? MapLatitude { get; init; }
+
+    public string? MapLongitude { get; init; }
+
+    public bool HasRawCoordinate =>
+        !string.IsNullOrWhiteSpace(RawLatitude)
+        && !string.IsNullOrWhiteSpace(RawLongitude);
+
+    public bool HasCachedMapCoordinate =>
+        !string.IsNullOrWhiteSpace(MapLatitude)
+        && !string.IsNullOrWhiteSpace(MapLongitude);
 }
 
 public sealed record DeviceUserMaintenance(

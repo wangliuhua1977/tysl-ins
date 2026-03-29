@@ -182,6 +182,62 @@ public sealed class MapPageViewModelTests
         Assert.Equal("坐标转换失败，需人工确认", point.GetProperty("coordinateStateText").GetString());
     }
 
+    [Fact]
+    public async Task InitializeAsync_ShowsRateLimitedCoordinateStateInBootstrap()
+    {
+        var viewModel = new MapPageViewModel(
+            new StubMapService(
+                new MapLoadResult(
+                    true,
+                    string.Empty,
+                    [
+                        new InspectionDevice(
+                            "dev-004",
+                            "限频设备",
+                            "group-001",
+                            null,
+                            null,
+                            "上海",
+                            1,
+                            1,
+                            1,
+                            0,
+                            DateTimeOffset.Parse("2026-03-29T09:45:00+08:00"),
+                            "none",
+                            CoordinateStateCatalog.RateLimited,
+                            "坐标获取限频，稍后重试。")
+                    ])
+                {
+                    ProjectionByDeviceCode = new Dictionary<string, CoordinateProjectionResult>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["dev-004"] = new(
+                            "dev-004",
+                            false,
+                            false,
+                            CoordinateStateCatalog.RateLimited,
+                            "坐标获取限频，稍后重试",
+                            "坐标获取限频，稍后重试。",
+                            null,
+                            null)
+                    }
+                }),
+            new MapOptions
+            {
+                JsKey = "__SET_IN_LOCAL_FILE__",
+                SecurityJsCode = "__SET_IN_LOCAL_FILE__"
+            },
+            NullLogger<MapPageViewModel>.Instance);
+
+        await viewModel.InitializeAsync();
+
+        using var document = JsonDocument.Parse(viewModel.MapBootstrapJson);
+        var point = document.RootElement.GetProperty("points")[0];
+
+        Assert.Equal("rate_limited", point.GetProperty("coordinateState").GetString());
+        Assert.Equal("坐标获取限频，稍后重试", point.GetProperty("coordinateStateText").GetString());
+        Assert.Contains("限频", point.GetProperty("coordinateWarning").GetString());
+    }
+
     private sealed class StubMapService(MapLoadResult result) : IMapService
     {
         public Task<MapLoadResult> LoadAsync(CancellationToken cancellationToken)

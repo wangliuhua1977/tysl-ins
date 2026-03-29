@@ -211,6 +211,8 @@ public sealed class SqliteGroupSyncStore(
                 deviceCode,
                 deviceName,
                 groupId,
+                latitude,
+                longitude,
                 rawLatitude,
                 rawLongitude,
                 location,
@@ -335,8 +337,8 @@ public sealed class SqliteGroupSyncStore(
                 """;
             update.Parameters.AddWithValue("@deviceCode", device.DeviceCode);
             update.Parameters.AddWithValue("@deviceName", device.DeviceName);
-            update.Parameters.AddWithValue("@latitude", (object?)device.Latitude ?? DBNull.Value);
-            update.Parameters.AddWithValue("@longitude", (object?)device.Longitude ?? DBNull.Value);
+            update.Parameters.AddWithValue("@latitude", (object?)device.MapLatitude ?? DBNull.Value);
+            update.Parameters.AddWithValue("@longitude", (object?)device.MapLongitude ?? DBNull.Value);
             update.Parameters.AddWithValue("@rawLatitude", (object?)device.RawLatitude ?? DBNull.Value);
             update.Parameters.AddWithValue("@rawLongitude", (object?)device.RawLongitude ?? DBNull.Value);
             update.Parameters.AddWithValue("@location", (object?)device.Location ?? DBNull.Value);
@@ -469,8 +471,8 @@ public sealed class SqliteGroupSyncStore(
         insert.Parameters.AddWithValue("@deviceCode", device.DeviceCode);
         insert.Parameters.AddWithValue("@deviceName", device.DeviceName);
         insert.Parameters.AddWithValue("@groupId", device.GroupId);
-        insert.Parameters.AddWithValue("@latitude", (object?)device.Latitude ?? DBNull.Value);
-        insert.Parameters.AddWithValue("@longitude", (object?)device.Longitude ?? DBNull.Value);
+        insert.Parameters.AddWithValue("@latitude", (object?)device.MapLatitude ?? DBNull.Value);
+        insert.Parameters.AddWithValue("@longitude", (object?)device.MapLongitude ?? DBNull.Value);
         insert.Parameters.AddWithValue("@rawLatitude", (object?)device.RawLatitude ?? DBNull.Value);
         insert.Parameters.AddWithValue("@rawLongitude", (object?)device.RawLongitude ?? DBNull.Value);
         insert.Parameters.AddWithValue("@location", (object?)device.Location ?? DBNull.Value);
@@ -497,6 +499,8 @@ public sealed class SqliteGroupSyncStore(
                 deviceCode,
                 deviceName,
                 groupId,
+                latitude,
+                longitude,
                 rawLatitude,
                 rawLongitude,
                 location,
@@ -535,6 +539,8 @@ public sealed class SqliteGroupSyncStore(
         {
             Latitude = device.Latitude ?? existingDevice.Latitude,
             Longitude = device.Longitude ?? existingDevice.Longitude,
+            MapLatitude = device.MapLatitude ?? existingDevice.MapLatitude,
+            MapLongitude = device.MapLongitude ?? existingDevice.MapLongitude,
             Location = device.Location ?? existingDevice.Location,
             CoordinateSource = string.IsNullOrWhiteSpace(device.CoordinateSource) ? existingDevice.CoordinateSource : device.CoordinateSource,
             CoordinateStatus = string.IsNullOrWhiteSpace(device.CoordinateStatus) ? existingDevice.CoordinateStatus : device.CoordinateStatus,
@@ -701,17 +707,21 @@ public sealed class SqliteGroupSyncStore(
             ReadString(reader, 0),
             ReadString(reader, 1),
             ReadString(reader, 2),
-            ReadNullableString(reader, 3),
-            ReadNullableString(reader, 4),
             ReadNullableString(reader, 5),
-            ReadNullableInt32(reader, 9),
-            ReadNullableInt32(reader, 10),
+            ReadNullableString(reader, 6),
+            ReadNullableString(reader, 7),
             ReadNullableInt32(reader, 11),
             ReadNullableInt32(reader, 12),
-            ReadSyncedAt(reader, 13),
-            ReadString(reader, 6),
-            ReadString(reader, 7),
-            ReadString(reader, 8));
+            ReadNullableInt32(reader, 13),
+            ReadNullableInt32(reader, 14),
+            ReadSyncedAt(reader, 15),
+            ReadString(reader, 8),
+            ReadString(reader, 9),
+            ReadString(reader, 10))
+        {
+            MapLatitude = ReadNullableString(reader, 3),
+            MapLongitude = ReadNullableString(reader, 4)
+        };
     }
 
     private static string ReadString(SqliteDataReader reader, int ordinal)

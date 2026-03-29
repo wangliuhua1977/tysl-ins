@@ -1,9 +1,11 @@
+using System.Globalization;
 using System.IO;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Web.WebView2.Wpf;
 using Tysl.Inspection.Desktop.Application.Abstractions;
 using Tysl.Inspection.Desktop.Contracts.Configuration;
+using Tysl.Inspection.Desktop.Domain.Models;
 
 namespace Tysl.Inspection.Desktop.App.Services;
 
@@ -27,24 +29,52 @@ public sealed class AmapCoordProjector(
             return new Dictionary<string, CoordinateProjectionResult>(StringComparer.OrdinalIgnoreCase);
         }
 
-        var candidateCount = items.Count(HasRawCoordinate);
-        logger.LogInformation("BD-09 to GCJ-02 conversion started. CandidateCount={CandidateCount}.", candidateCount);
+        var results = new Dictionary<string, CoordinateProjectionResult>(StringComparer.OrdinalIgnoreCase);
+        var conversionCandidates = new List<CoordinateProjectionRequest>(items.Length);
+        var cachedRenderCount = 0;
 
-        if (candidateCount == 0)
+        foreach (var item in items)
         {
-            var missingOnly = items.ToDictionary(
-                item => item.DeviceCode,
-                BuildMissingResult,
-                StringComparer.OrdinalIgnoreCase);
+            if (HasReusableCachedMapCoordinate(item))
+            {
+                results[item.DeviceCode] = BuildCachedMapResult(item);
+                cachedRenderCount++;
+                continue;
+            }
 
-            logger.LogInformation("BD-09 to GCJ-02 conversion completed. RenderedCount=0, FailedCount=0.");
-            return missingOnly;
+            if (!HasRawCoordinate(item))
+            {
+                results[item.DeviceCode] = BuildStateOnlyResult(item);
+                continue;
+            }
+
+            conversionCandidates.Add(item);
+        }
+
+        logger.LogInformation(
+            "BD-09 to GCJ-02 projection started. TotalCount={TotalCount}, CachedRenderCount={CachedRenderCount}, ConversionCandidateCount={ConversionCandidateCount}.",
+            items.Length,
+            cachedRenderCount,
+            conversionCandidates.Count);
+
+        if (conversionCandidates.Count == 0)
+        {
+            logger.LogInformation(
+                "BD-09 to GCJ-02 projection completed. RenderedCount={RenderedCount}, FailedCount=0, CachedRenderCount={CachedRenderCount}.",
+                results.Values.Count(item => item.HasMapCoordinate),
+                cachedRenderCount);
+            return results;
         }
 
         if (!mapOptions.HasJsKey())
         {
-            logger.LogWarning("BD-09 to GCJ-02 conversion failed because AMap JS key is missing.");
-            return BuildFallbackResults(items, "缺少高德地图 Key，无法执行坐标转换。");
+            logger.LogWarning("BD-09 to GCJ-02 projection failed because AMap JS key is missing.");
+            foreach (var item in conversionCandidates)
+            {
+                results[item.DeviceCode] = BuildFailedResult(item, "缺少高德地图 Key，无法执行坐标转换。");
+            }
+
+            return results;
         }
 
         await gate.WaitAsync(cancellationToken);
@@ -53,12 +83,12 @@ public sealed class AmapCoordProjector(
             await EnsureInitializedAsync(cancellationToken);
 
             var pointsJson = JsonSerializer.Serialize(
-                items.Select(item => new
+                conversionCandidates.Select(item => new
                 {
                     deviceCode = item.DeviceCode,
                     rawLatitude = item.RawLatitude ?? string.Empty,
                     rawLongitude = item.RawLongitude ?? string.Empty,
-                    hasRawCoordinate = HasRawCoordinate(item)
+                    hasRawCoordinate = true
                 }),
                 JsonOptions);
             var configJson = JsonSerializer.Serialize(
@@ -82,24 +112,30 @@ public sealed class AmapCoordProjector(
                 .Where(item => !string.IsNullOrWhiteSpace(item.DeviceCode))
                 .ToDictionary(item => item.DeviceCode!, StringComparer.OrdinalIgnoreCase);
 
-            var results = items.ToDictionary(
-                item => item.DeviceCode,
-                item => payloadByDeviceCode.TryGetValue(item.DeviceCode, out var payload)
+            foreach (var item in conversionCandidates)
+            {
+                results[item.DeviceCode] = payloadByDeviceCode.TryGetValue(item.DeviceCode, out var payload)
                     ? ToResult(item, payload)
-                    : BuildFailedResult(item, "坐标转换失败，需人工确认。"),
-                StringComparer.OrdinalIgnoreCase);
+                    : BuildFailedResult(item, "坐标转换失败，需人工确认。");
+            }
 
             logger.LogInformation(
-                "BD-09 to GCJ-02 conversion completed. RenderedCount={RenderedCount}, FailedCount={FailedCount}.",
+                "BD-09 to GCJ-02 projection completed. RenderedCount={RenderedCount}, FailedCount={FailedCount}, CachedRenderCount={CachedRenderCount}.",
                 results.Values.Count(item => item.HasMapCoordinate),
-                results.Values.Count(item => item.CoordinateState == "failed"));
+                results.Values.Count(item => item.CoordinateState == CoordinateStateCatalog.Failed),
+                cachedRenderCount);
 
             return results;
         }
         catch (Exception exception)
         {
-            logger.LogWarning(exception, "BD-09 to GCJ-02 conversion failed unexpectedly.");
-            return BuildFallbackResults(items, "坐标转换失败，需人工确认。");
+            logger.LogWarning(exception, "BD-09 to GCJ-02 projection failed unexpectedly.");
+            foreach (var item in conversionCandidates)
+            {
+                results[item.DeviceCode] = BuildFailedResult(item, "坐标转换失败，需人工确认。");
+            }
+
+            return results;
         }
         finally
         {
@@ -202,38 +238,51 @@ public sealed class AmapCoordProjector(
 
     private static CoordinateProjectionResult ToResult(CoordinateProjectionRequest request, ProjectionPayload payload)
     {
+        if (payload.HasMapCoordinate)
+        {
+            return new CoordinateProjectionResult(
+                request.DeviceCode,
+                true,
+                true,
+                CoordinateStateCatalog.Available,
+                CoordinateStateCatalog.GetStateText(CoordinateStateCatalog.Available, true),
+                string.IsNullOrWhiteSpace(payload.CoordinateWarning)
+                    ? CoordinateStateCatalog.GetWarningText(CoordinateStateCatalog.Available, null, true)
+                    : payload.CoordinateWarning,
+                payload.MapLatitude,
+                payload.MapLongitude);
+        }
+
+        return BuildFailedResult(
+            request,
+            string.IsNullOrWhiteSpace(payload.CoordinateWarning)
+                ? "坐标转换失败，需人工确认。"
+                : payload.CoordinateWarning);
+    }
+
+    private static CoordinateProjectionResult BuildCachedMapResult(CoordinateProjectionRequest request)
+    {
         return new CoordinateProjectionResult(
             request.DeviceCode,
-            payload.HasRawCoordinate,
-            payload.HasMapCoordinate,
-            payload.CoordinateState ?? string.Empty,
-            payload.CoordinateStateText ?? string.Empty,
-            payload.CoordinateWarning ?? string.Empty,
-            payload.MapLatitude,
-            payload.MapLongitude);
+            true,
+            true,
+            CoordinateStateCatalog.Available,
+            CoordinateStateCatalog.GetStateText(CoordinateStateCatalog.Available, true),
+            "优先使用已缓存渲染坐标。",
+            request.CachedMapLatitude,
+            request.CachedMapLongitude);
     }
 
-    private static IReadOnlyDictionary<string, CoordinateProjectionResult> BuildFallbackResults(
-        IReadOnlyCollection<CoordinateProjectionRequest> requests,
-        string warning)
+    private static CoordinateProjectionResult BuildStateOnlyResult(CoordinateProjectionRequest request)
     {
-        return requests.ToDictionary(
-            item => item.DeviceCode,
-            item => HasRawCoordinate(item)
-                ? BuildFailedResult(item, warning)
-                : BuildMissingResult(item),
-            StringComparer.OrdinalIgnoreCase);
-    }
-
-    private static CoordinateProjectionResult BuildMissingResult(CoordinateProjectionRequest request)
-    {
+        var state = NormalizeState(request.CoordinateStatus);
         return new CoordinateProjectionResult(
             request.DeviceCode,
             false,
             false,
-            "missing",
-            "平台未提供坐标",
-            "平台未提供坐标，当前不进入上图。",
+            state,
+            CoordinateStateCatalog.GetStateText(state, false),
+            CoordinateStateCatalog.GetWarningText(state, request.CoordinateStatusMessage, false),
             null,
             null);
     }
@@ -244,7 +293,7 @@ public sealed class AmapCoordProjector(
             request.DeviceCode,
             true,
             false,
-            "failed",
+            CoordinateStateCatalog.Failed,
             "坐标转换失败，需人工确认",
             warning,
             null,
@@ -253,8 +302,41 @@ public sealed class AmapCoordProjector(
 
     private static bool HasRawCoordinate(CoordinateProjectionRequest request)
     {
-        return double.TryParse(request.RawLatitude, out _)
-            && double.TryParse(request.RawLongitude, out _);
+        return TryReadCoordinate(request.RawLatitude, out _)
+            && TryReadCoordinate(request.RawLongitude, out _);
+    }
+
+    private static bool HasReusableCachedMapCoordinate(CoordinateProjectionRequest request)
+    {
+        if (!HasRawCoordinate(request)
+            || !TryReadCoordinate(request.CachedMapLatitude, out _)
+            || !TryReadCoordinate(request.CachedMapLongitude, out _))
+        {
+            return false;
+        }
+
+        return !string.Equals(request.RawLatitude, request.CachedMapLatitude, StringComparison.Ordinal)
+               || !string.Equals(request.RawLongitude, request.CachedMapLongitude, StringComparison.Ordinal);
+    }
+
+    private static bool TryReadCoordinate(string? value, out double coordinate)
+    {
+        return double.TryParse(
+            value,
+            NumberStyles.Float | NumberStyles.AllowThousands,
+            CultureInfo.InvariantCulture,
+            out coordinate);
+    }
+
+    private static string NormalizeState(string? state)
+    {
+        return state switch
+        {
+            CoordinateStateCatalog.Available => CoordinateStateCatalog.Available,
+            CoordinateStateCatalog.RateLimited => CoordinateStateCatalog.RateLimited,
+            CoordinateStateCatalog.Failed => CoordinateStateCatalog.Failed,
+            _ => CoordinateStateCatalog.Missing
+        };
     }
 
     private static async Task RunOnUiAsync(Func<Task> action)

@@ -141,7 +141,11 @@ public sealed record CoordinateProjectionRequest(
     string DeviceCode,
     string DeviceName,
     string? RawLatitude,
-    string? RawLongitude);
+    string? RawLongitude,
+    string? CachedMapLatitude = null,
+    string? CachedMapLongitude = null,
+    string CoordinateStatus = "",
+    string CoordinateStatusMessage = "");
 
 public sealed record CoordinateProjectionResult(
     string DeviceCode,

@@ -962,12 +962,18 @@ public sealed partial class PreviewPageViewModel(
             return projection.CoordinateStateText;
         }
 
-        return detail?.CoordinateStatus switch
-        {
-            "available" => "已获取平台原始坐标",
-            "lookup_failed" => "平台坐标读取失败，需人工确认",
-            _ => "平台未提供坐标"
-        };
+        var hasRawCoordinate = !string.IsNullOrWhiteSpace(detail?.RawLatitude)
+                               && !string.IsNullOrWhiteSpace(detail?.RawLongitude);
+        var state = hasRawCoordinate
+            ? CoordinateStateCatalog.Available
+            : detail?.CoordinateStatus switch
+            {
+                CoordinateStateCatalog.RateLimited => CoordinateStateCatalog.RateLimited,
+                CoordinateStateCatalog.Failed => CoordinateStateCatalog.Failed,
+                _ => CoordinateStateCatalog.Missing
+            };
+
+        return CoordinateStateCatalog.GetStateText(state, hasMapCoordinate: false);
     }
 
     private static string BuildCoordinateRemarkText(InspectionDevice? detail, CoordinateProjectionResult? projection)
@@ -977,9 +983,18 @@ public sealed partial class PreviewPageViewModel(
             return projection.CoordinateWarning;
         }
 
-        return !string.IsNullOrWhiteSpace(detail?.CoordinateStatusMessage)
-            ? detail.CoordinateStatusMessage
-            : "平台未提供坐标，当前不进入上图。";
+        var hasRawCoordinate = !string.IsNullOrWhiteSpace(detail?.RawLatitude)
+                               && !string.IsNullOrWhiteSpace(detail?.RawLongitude);
+        var state = hasRawCoordinate
+            ? CoordinateStateCatalog.Available
+            : detail?.CoordinateStatus switch
+            {
+                CoordinateStateCatalog.RateLimited => CoordinateStateCatalog.RateLimited,
+                CoordinateStateCatalog.Failed => CoordinateStateCatalog.Failed,
+                _ => CoordinateStateCatalog.Missing
+            };
+
+        return CoordinateStateCatalog.GetWarningText(state, detail?.CoordinateStatusMessage, hasMapCoordinate: false);
     }
 
     private void ApplyDirectorySummary(PreviewDeviceLoadResult result)
