@@ -451,6 +451,17 @@ public sealed class GroupSyncServiceTests
             return Task.FromResult<IReadOnlyList<InspectionDevice>>(devices.ToArray());
         }
 
+        public Task<IReadOnlyDictionary<string, DeviceUserMaintenance>> GetDeviceMaintenanceMapAsync(CancellationToken cancellationToken)
+        {
+            return Task.FromResult<IReadOnlyDictionary<string, DeviceUserMaintenance>>(
+                new Dictionary<string, DeviceUserMaintenance>(StringComparer.OrdinalIgnoreCase));
+        }
+
+        public Task SaveDeviceMaintenanceAsync(DeviceUserMaintenance maintenance, CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
+
         public Task<LocalSyncSnapshot> GetLocalSyncSnapshotAsync(CancellationToken cancellationToken)
         {
             var lastSyncedAt = groups.Select(group => group.SyncedAt)

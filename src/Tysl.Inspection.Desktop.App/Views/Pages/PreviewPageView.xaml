@@ -278,19 +278,28 @@
                             <TextBlock FontSize="16"
                                        FontWeight="SemiBold"
                                        Foreground="{DynamicResource PrimaryTextBrush}"
-                                       Text="点位最小详情" />
+                                       Text="点位详情" />
+
+                            <TextBlock Margin="0,12,0,0"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource PrimaryTextBrush}"
+                                       Text="平台设备信息" />
+
+                            <TextBlock Margin="0,10,0,0"
+                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                       Text="设备名称" />
+                            <TextBlock Margin="0,4,0,0"
+                                       Foreground="{DynamicResource PrimaryTextBrush}"
+                                       TextWrapping="Wrap"
+                                       Text="{Binding DeviceName}" />
 
                             <TextBlock Margin="0,12,0,0"
                                        Foreground="{DynamicResource SecondaryTextBrush}"
-                                       Text="设备名称 / 编码" />
+                                       Text="设备编码" />
                             <TextBlock Margin="0,4,0,0"
                                        Foreground="{DynamicResource PrimaryTextBrush}"
-                                       TextWrapping="Wrap">
-                                <Run Text="{Binding DeviceName}" />
-                                <Run Text=" (" />
-                                <Run Text="{Binding DeviceCode}" />
-                                <Run Text=")" />
-                            </TextBlock>
+                                       TextWrapping="Wrap"
+                                       Text="{Binding DeviceCode}" />
 
                             <TextBlock Margin="0,12,0,0"
                                        Foreground="{DynamicResource SecondaryTextBrush}"
@@ -315,7 +324,23 @@
                                 </StackPanel>
 
                                 <StackPanel Grid.Column="2">
-                                    <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="位置" />
+                                    <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="原始坐标来源" />
+                                    <TextBlock Margin="0,4,0,0"
+                                               Foreground="{DynamicResource PrimaryTextBrush}"
+                                               TextWrapping="Wrap"
+                                               Text="{Binding SelectedDeviceCoordinateSourceText}" />
+                                </StackPanel>
+                            </Grid>
+
+                            <Grid Margin="0,12,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="平台原始经纬度" />
                                     <TextBlock Margin="0,4,0,0"
                                                Foreground="{DynamicResource PrimaryTextBrush}"
                                                TextWrapping="Wrap">
@@ -324,11 +349,19 @@
                                         <Run Text="{Binding SelectedDeviceLongitudeText}" />
                                     </TextBlock>
                                 </StackPanel>
+
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="地图渲染口径" />
+                                    <TextBlock Margin="0,4,0,0"
+                                               Foreground="{DynamicResource PrimaryTextBrush}"
+                                               TextWrapping="Wrap"
+                                               Text="{Binding SelectedDeviceMapCoordinateUsageText}" />
+                                </StackPanel>
                             </Grid>
 
                             <TextBlock Margin="0,12,0,0"
                                        Foreground="{DynamicResource SecondaryTextBrush}"
-                                       Text="地址信息" />
+                                       Text="地址 / 位置编码" />
                             <TextBlock Margin="0,4,0,0"
                                        Foreground="{DynamicResource PrimaryTextBrush}"
                                        TextWrapping="Wrap"
@@ -348,7 +381,88 @@
                             <TextBlock Margin="0,4,0,0"
                                        Foreground="{DynamicResource PrimaryTextBrush}"
                                        TextWrapping="Wrap"
-                                       Text="{Binding SelectedDeviceAbnormalPoolText}" />
+                                       Text="{Binding SelectedDeviceAbnormalSummaryText}" />
+
+                            <Grid Margin="0,12,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="处置状态" />
+                                    <TextBlock Margin="0,4,0,0"
+                                               Foreground="{DynamicResource PrimaryTextBrush}"
+                                               Text="{Binding SelectedDeviceHandleStatusText}" />
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="恢复确认状态" />
+                                    <TextBlock Margin="0,4,0,0"
+                                               Foreground="{DynamicResource PrimaryTextBrush}"
+                                               Text="{Binding SelectedDeviceRecoveredStatusText}" />
+                                </StackPanel>
+                            </Grid>
+
+                            <Border Margin="0,16,0,0"
+                                    Height="1"
+                                    Background="{DynamicResource CardBorderBrush}" />
+
+                            <TextBlock Margin="0,16,0,0"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource PrimaryTextBrush}"
+                                       Text="用户维护信息" />
+
+                            <TextBlock Margin="0,10,0,0"
+                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                       Text="维护状态" />
+                            <TextBox Margin="0,4,0,0"
+                                     Padding="10"
+                                     Background="{DynamicResource CardBrush}"
+                                     BorderBrush="{DynamicResource CardBorderBrush}"
+                                     BorderThickness="1"
+                                     Text="{Binding SelectedDeviceMaintenanceStatusText, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <TextBlock Margin="0,12,0,0"
+                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                       Text="维护备注" />
+                            <TextBox Margin="0,4,0,0"
+                                     Padding="10"
+                                     MinHeight="72"
+                                     Background="{DynamicResource CardBrush}"
+                                     BorderBrush="{DynamicResource CardBorderBrush}"
+                                     BorderThickness="1"
+                                     TextWrapping="Wrap"
+                                     AcceptsReturn="True"
+                                     VerticalScrollBarVisibility="Auto"
+                                     Text="{Binding SelectedDeviceMaintenanceNoteText, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <TextBlock Margin="0,12,0,0"
+                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                       Text="最近人工确认说明" />
+                            <TextBox Margin="0,4,0,0"
+                                     Padding="10"
+                                     MinHeight="72"
+                                     Background="{DynamicResource CardBrush}"
+                                     BorderBrush="{DynamicResource CardBorderBrush}"
+                                     BorderThickness="1"
+                                     TextWrapping="Wrap"
+                                     AcceptsReturn="True"
+                                     VerticalScrollBarVisibility="Auto"
+                                     Text="{Binding SelectedDeviceManualConfirmationNoteText, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <TextBlock Margin="0,12,0,0"
+                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                       Text="最近保存时间" />
+                            <TextBlock Margin="0,4,0,0"
+                                       Foreground="{DynamicResource PrimaryTextBrush}"
+                                       Text="{Binding SelectedDeviceMaintenanceUpdatedAtText}" />
+
+                            <Button Margin="0,16,0,0"
+                                    Padding="16,10"
+                                    Command="{Binding SaveSelectedDeviceMaintenanceCommand}"
+                                    Content="保存维护信息" />
                         </StackPanel>
                     </Border>
 

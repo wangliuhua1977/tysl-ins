@@ -30,6 +30,10 @@ public interface IGroupSyncStore
 
     Task<IReadOnlyList<InspectionDevice>> GetDevicesAsync(CancellationToken cancellationToken);
 
+    Task<IReadOnlyDictionary<string, DeviceUserMaintenance>> GetDeviceMaintenanceMapAsync(CancellationToken cancellationToken);
+
+    Task SaveDeviceMaintenanceAsync(DeviceUserMaintenance maintenance, CancellationToken cancellationToken);
+
     Task<LocalSyncSnapshot> GetLocalSyncSnapshotAsync(CancellationToken cancellationToken);
 }
 
@@ -62,6 +66,13 @@ public interface IPreviewService
     Task<PreviewPrepareResult> PrepareAsync(string deviceCode, CancellationToken cancellationToken);
 
     Task<InspectResult> InspectAsync(string deviceCode, CancellationToken cancellationToken);
+
+    Task<PreviewDeviceMaintenanceSaveResult> SaveDeviceMaintenanceAsync(
+        string deviceCode,
+        string maintenanceStatus,
+        string maintenanceNote,
+        string manualConfirmationNote,
+        CancellationToken cancellationToken);
 }
 
 public interface IInspectAbnormalStore
@@ -170,6 +181,9 @@ public sealed record PreviewDeviceLoadResult(
 {
     public IReadOnlyDictionary<string, InspectionDevice> DeviceDetailsByCode { get; init; }
         = new Dictionary<string, InspectionDevice>(StringComparer.OrdinalIgnoreCase);
+
+    public IReadOnlyDictionary<string, DeviceUserMaintenance> DeviceMaintenanceByCode { get; init; }
+        = new Dictionary<string, DeviceUserMaintenance>(StringComparer.OrdinalIgnoreCase);
 }
 
 public sealed record PreviewPrepareResult(
@@ -181,6 +195,11 @@ public sealed record PreviewPrepareResult(
     string? RtspUrl,
     string ExpireText,
     DateTimeOffset RequestedAt);
+
+public sealed record PreviewDeviceMaintenanceSaveResult(
+    bool Success,
+    string Message,
+    DeviceUserMaintenance? Maintenance);
 
 public sealed record PlayProbeArgs(
     string DeviceName,

@@ -107,6 +107,32 @@ public partial class MapPageView : System.Windows.Controls.UserControl
                     : null;
 
                 viewModel?.ReportMapRenderFailure(message ?? "地图脚本加载失败。");
+                return;
+            }
+
+            if (messageType is "coordinate-conversion-started")
+            {
+                var total = ReadInt(document.RootElement, "total");
+                viewModel?.ReportCoordinateConversionStarted(total);
+                return;
+            }
+
+            if (messageType is "coordinate-conversion-completed")
+            {
+                var renderedCount = ReadInt(document.RootElement, "renderedCount");
+                var missingCount = ReadInt(document.RootElement, "missingCount");
+                var failedCount = ReadInt(document.RootElement, "failedCount");
+                viewModel?.ReportCoordinateConversionCompleted(renderedCount, missingCount, failedCount);
+                return;
+            }
+
+            if (messageType is "coordinate-conversion-failed")
+            {
+                var failedCount = ReadInt(document.RootElement, "failedCount");
+                var message = document.RootElement.TryGetProperty("message", out var messageElement)
+                    ? messageElement.GetString()
+                    : null;
+                viewModel?.ReportCoordinateConversionFailed(failedCount, message ?? "坐标转换失败，需人工确认。");
             }
         }
         catch
@@ -144,5 +170,17 @@ public partial class MapPageView : System.Windows.Controls.UserControl
             "<div class=\"card\"><h1>地图页无法初始化</h1><p>",
             safeMessage,
             "</p></div></body></html>");
+    }
+
+    private static int ReadInt(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var value))
+        {
+            return 0;
+        }
+
+        return value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number)
+            ? number
+            : 0;
     }
 }

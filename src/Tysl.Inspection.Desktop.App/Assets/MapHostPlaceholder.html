@@ -249,6 +249,14 @@
                 return "离线";
             }
 
+            if (value === 2) {
+                return "休眠（普通）";
+            }
+
+            if (value === 3) {
+                return "休眠（保活/AOV）";
+            }
+
             return "未知";
         }
 
@@ -270,58 +278,6 @@
             }
         }
 
-        function setInfo(point) {
-            state.selected = point || null;
-            if (!point) {
-                infoTitleEl.textContent = "点位信息";
-                infoHintEl.style.display = "block";
-                infoHintEl.textContent = "点击地图上的点位查看详情。";
-                infoGridEl.innerHTML = "";
-                return;
-            }
-
-            const location = readLocation(point);
-            infoTitleEl.textContent = "点位信息";
-            infoHintEl.style.display = "none";
-            infoGridEl.innerHTML = renderPairs([
-                ["设备名称", displayName(point.deviceName)],
-                ["设备编码", displayText(point.deviceCode)],
-                ["分组编号", displayText(point.groupId)],
-                [location.label, location.value],
-                ["纬度", displayText(point.latitude)],
-                ["经度", displayText(point.longitude)],
-                ["在线状态", point.onlineStatusText || onlineStatusText(point.onlineStatus)],
-                ["云台状态", displayText(point.cloudStatus)],
-                ["布防状态", displayText(point.bandStatus)],
-                ["来源标识", displayText(point.sourceTypeFlag)]
-            ]);
-        }
-
-        function setUnlocated(points) {
-            const unlocated = points.filter((point) => !point.hasCoordinate);
-            if (unlocated.length === 0) {
-                unlocatedSummaryEl.textContent = "暂无未定位点位。";
-                unlocatedListEl.innerHTML = "";
-                return;
-            }
-
-            unlocatedSummaryEl.textContent = `共 ${unlocated.length} 个未定位点位。`;
-            unlocatedListEl.innerHTML = unlocated.map((point) => {
-                const location = readLocation(point);
-                return `
-                    <article class="unlocated-item">
-                        <div class="unlocated-name">${escapeHtml(displayName(point.deviceName))}</div>
-                        <div class="unlocated-grid">
-                            ${renderPairs([
-                                ["设备编码", displayText(point.deviceCode)],
-                                ["分组编号", displayText(point.groupId)],
-                                [location.label, location.value]
-                            ])}
-                        </div>
-                    </article>`;
-            }).join("");
-        }
-
         function setStats(stats) {
             renderedEl.textContent = stats.renderedCount ?? 0;
             onlineEl.textContent = stats.onlineCount ?? 0;
@@ -340,6 +296,139 @@
 
         function hideEmpty() {
             emptyEl.style.display = "none";
+        }
+
+        function formatCoordinate(value) {
+            const number = Number(value);
+            if (!Number.isFinite(number)) {
+                return "";
+            }
+
+            return number.toFixed(6).replace(/0+$/u, "").replace(/\.$/u, "");
+        }
+
+        function rawCoordinateText(point) {
+            if (!point.hasRawCoordinate) {
+                return "无";
+            }
+
+            return `${displayText(point.rawLatitude)} / ${displayText(point.rawLongitude)}`;
+        }
+
+        function mapCoordinateText(point) {
+            if (point.hasMapCoordinate) {
+                return `${displayText(point.mapLatitude)} / ${displayText(point.mapLongitude)}`;
+            }
+
+            if (point.coordinateState === "failed") {
+                return "坐标转换失败，需人工确认";
+            }
+
+            return "无";
+        }
+
+        function coordinateStateText(point) {
+            if (point.coordinateStateText) {
+                return point.coordinateStateText;
+            }
+
+            if (point.hasMapCoordinate) {
+                return "已转换为高德";
+            }
+
+            if (!point.hasRawCoordinate) {
+                return "无坐标";
+            }
+
+            return "待转换";
+        }
+
+        function coordinateWarningText(point) {
+            if (point.coordinateWarning) {
+                return point.coordinateWarning;
+            }
+
+            if (point.hasMapCoordinate) {
+                return "地图 marker 仅使用转换后的高德坐标。";
+            }
+
+            if (!point.hasRawCoordinate) {
+                return "当前无平台坐标，无法执行百度转高德。";
+            }
+
+            return "坐标转换失败，需人工确认。";
+        }
+
+        function setInfo(point) {
+            state.selected = point || null;
+            if (!point) {
+                infoTitleEl.textContent = "点位信息";
+                infoHintEl.style.display = "block";
+                infoHintEl.textContent = "点击地图上的点位查看详情。";
+                infoGridEl.innerHTML = "";
+                return;
+            }
+
+            const location = readLocation(point);
+            infoTitleEl.textContent = "点位信息";
+            infoHintEl.style.display = "none";
+            infoGridEl.innerHTML = renderPairs([
+                ["设备名称", displayName(point.deviceName)],
+                ["设备编码", displayText(point.deviceCode)],
+                ["分组编号", displayText(point.groupId)],
+                [location.label, location.value],
+                ["在线状态", point.onlineStatusText || onlineStatusText(point.onlineStatus)],
+                ["原始坐标来源", displayText(point.coordinateSourceText || point.coordinateSource || "百度")],
+                ["平台原始坐标", rawCoordinateText(point)],
+                ["地图渲染坐标", mapCoordinateText(point)],
+                ["坐标状态", coordinateStateText(point)],
+                ["坐标说明", coordinateWarningText(point)],
+                ["云台状态", displayText(point.cloudStatus)],
+                ["布防状态", displayText(point.bandStatus)],
+                ["来源标识", displayText(point.sourceTypeFlag)]
+            ]);
+        }
+
+        function buildUnlocatedReason(point) {
+            if (!point.hasRawCoordinate) {
+                return "无坐标";
+            }
+
+            return point.coordinateState === "failed"
+                ? "坐标转换失败，需人工确认"
+                : coordinateStateText(point);
+        }
+
+        function setUnlocated(points) {
+            const unlocated = points.filter((point) => !point.hasMapCoordinate);
+            if (unlocated.length === 0) {
+                unlocatedSummaryEl.textContent = "暂无未定位点位。";
+                unlocatedListEl.innerHTML = "";
+                return;
+            }
+
+            const failedCount = unlocated.filter((point) => point.coordinateState === "failed").length;
+            const missingCount = unlocated.filter((point) => !point.hasRawCoordinate).length;
+            unlocatedSummaryEl.textContent = failedCount > 0
+                ? `共 ${unlocated.length} 个未上图点位，其中 ${failedCount} 个坐标转换失败、${missingCount} 个无坐标。`
+                : `共 ${unlocated.length} 个未定位点位。`;
+            unlocatedListEl.innerHTML = unlocated.map((point) => {
+                const location = readLocation(point);
+                return `
+                    <article class="unlocated-item">
+                        <div class="unlocated-name">${escapeHtml(displayName(point.deviceName))}</div>
+                        <div class="unlocated-grid">
+                            ${renderPairs([
+                                ["设备编码", displayText(point.deviceCode)],
+                                ["分组编号", displayText(point.groupId)],
+                                ["平台原始坐标", rawCoordinateText(point)],
+                                ["未上图原因", buildUnlocatedReason(point)],
+                                ["说明", coordinateWarningText(point)],
+                                [location.label, location.value]
+                            ])}
+                        </div>
+                    </article>`;
+            }).join("");
         }
 
         async function ensureMapScript(config) {
@@ -386,8 +475,157 @@
             setInfo(point);
         }
 
+        function resolveConvertedLocation(result) {
+            const location = Array.isArray(result?.locations)
+                ? result.locations[0]
+                : result?.locations || result;
+
+            if (!location) {
+                throw new Error("高德坐标转换未返回结果。");
+            }
+
+            const lng = typeof location.getLng === "function"
+                ? location.getLng()
+                : Array.isArray(location)
+                    ? location[0]
+                    : location.lng;
+            const lat = typeof location.getLat === "function"
+                ? location.getLat()
+                : Array.isArray(location)
+                    ? location[1]
+                    : location.lat;
+
+            if (!Number.isFinite(Number(lng)) || !Number.isFinite(Number(lat))) {
+                throw new Error("高德坐标转换结果无效。");
+            }
+
+            return {
+                lng: formatCoordinate(lng),
+                lat: formatCoordinate(lat)
+            };
+        }
+
+        async function convertPoint(point, rawCoordinateSystem) {
+            if (!point.hasRawCoordinate) {
+                return Object.assign({}, point, {
+                    coordinateState: "missing",
+                    coordinateStateText: "无坐标",
+                    coordinateWarning: "当前无平台坐标，无法执行百度转高德。",
+                    hasMapCoordinate: false,
+                    mapLatitude: "",
+                    mapLongitude: ""
+                });
+            }
+
+            if (!window.AMap || typeof window.AMap.convertFrom !== "function") {
+                return Object.assign({}, point, {
+                    coordinateState: "failed",
+                    coordinateStateText: "坐标转换失败，需人工确认",
+                    coordinateWarning: "高德地图坐标转换能力不可用，需人工确认。",
+                    hasMapCoordinate: false,
+                    mapLatitude: "",
+                    mapLongitude: ""
+                });
+            }
+
+            return await new Promise((resolve) => {
+                const lng = Number(point.rawLongitude);
+                const lat = Number(point.rawLatitude);
+
+                window.AMap.convertFrom([lng, lat], rawCoordinateSystem || "baidu", (status, result) => {
+                    if (status !== "complete") {
+                        resolve(Object.assign({}, point, {
+                            coordinateState: "failed",
+                            coordinateStateText: "坐标转换失败，需人工确认",
+                            coordinateWarning: "高德坐标转换未完成，需人工确认。",
+                            hasMapCoordinate: false,
+                            mapLatitude: "",
+                            mapLongitude: ""
+                        }));
+                        return;
+                    }
+
+                    try {
+                        const converted = resolveConvertedLocation(result);
+                        resolve(Object.assign({}, point, {
+                            coordinateState: "converted",
+                            coordinateStateText: "已转换为高德",
+                            coordinateWarning: "地图 marker 仅使用转换后的高德坐标。",
+                            hasMapCoordinate: true,
+                            mapLatitude: converted.lat,
+                            mapLongitude: converted.lng
+                        }));
+                    } catch (error) {
+                        resolve(Object.assign({}, point, {
+                            coordinateState: "failed",
+                            coordinateStateText: "坐标转换失败，需人工确认",
+                            coordinateWarning: error && error.message
+                                ? error.message
+                                : "高德坐标转换结果无效，需人工确认。",
+                            hasMapCoordinate: false,
+                            mapLatitude: "",
+                            mapLongitude: ""
+                        }));
+                    }
+                });
+            });
+        }
+
+        async function convertPoints(points, mapCfg) {
+            const candidates = points.filter((point) => point.hasRawCoordinate);
+            post("coordinate-conversion-started", { total: candidates.length });
+
+            const converted = await Promise.all(
+                points.map((point) => convertPoint(point, mapCfg.rawCoordinateSystem || "baidu"))
+            );
+
+            const failed = converted.filter((point) => point.coordinateState === "failed");
+            if (failed.length > 0) {
+                const message = failed
+                    .slice(0, 3)
+                    .map((point) => `${displayName(point.deviceName)}(${displayText(point.deviceCode)})`)
+                    .join(" | ");
+                post("coordinate-conversion-failed", {
+                    failedCount: failed.length,
+                    message: message || "存在坐标转换失败点位，需人工确认。"
+                });
+            }
+
+            post("coordinate-conversion-completed", {
+                renderedCount: converted.filter((point) => point.hasMapCoordinate).length,
+                missingCount: converted.filter((point) => !point.hasRawCoordinate).length,
+                failedCount: failed.length
+            });
+
+            return converted;
+        }
+
+        function buildStatusText(points) {
+            const total = points.length;
+            const renderedCount = points.filter((point) => point.hasMapCoordinate).length;
+            const missingCount = points.filter((point) => !point.hasRawCoordinate).length;
+            const failedCount = points.filter((point) => point.coordinateState === "failed").length;
+
+            if (failedCount > 0) {
+                return `已读取 ${total} 个本地点位，其中 ${renderedCount} 个完成百度转高德并上图，${missingCount} 个无坐标，${failedCount} 个坐标转换失败，需人工确认。`;
+            }
+
+            return `已读取 ${total} 个本地点位，其中 ${renderedCount} 个已按百度转高德后上图，${missingCount} 个无坐标。`;
+        }
+
+        function updateSummary(points) {
+            setStats({
+                renderedCount: points.filter((point) => point.hasMapCoordinate).length,
+                onlineCount: points.filter((point) => point.onlineStatus === 1).length,
+                offlineCount: points.filter((point) => point.onlineStatus === 0).length,
+                unlocatedCount: points.filter((point) => !point.hasMapCoordinate).length
+            });
+            setStatus(buildStatusText(points));
+            setUnlocated(points);
+        }
+
         function renderMap(points) {
-            const renderable = points.filter((point) => point.hasCoordinate);
+            const renderable = points.filter((point) => point.hasMapCoordinate);
             if (!state.map) {
                 state.map = new AMap.Map("map", {
                     zoom: 4,
@@ -400,8 +638,8 @@
             state.markers = [];
 
             renderable.forEach((point) => {
-                const lng = Number(point.longitude);
-                const lat = Number(point.latitude);
+                const lng = Number(point.mapLongitude);
+                const lat = Number(point.mapLatitude);
                 if (!Number.isFinite(lng) || !Number.isFinite(lat)) {
                     return;
                 }
@@ -420,12 +658,12 @@
             if (state.markers.length > 0) {
                 state.map.setFitView(state.markers);
                 hideEmpty();
-                if (!state.selected) {
+                if (!state.selected || !state.selected.hasMapCoordinate) {
                     showPoint(renderable[0]);
                 }
             } else {
                 state.map.setZoomAndCenter(4, [105, 35]);
-                showEmpty("暂无可上图点位，请检查经纬度数据。");
+                showEmpty("暂无可上图点位，请检查平台坐标或坐标转换结果。");
                 setInfo(null);
             }
         }
@@ -436,9 +674,9 @@
 
             const mapCfg = bootstrap.map || {};
             const points = Array.isArray(bootstrap.points) ? bootstrap.points : [];
-            setUnlocated(points);
 
             if (!mapCfg.shouldLoadMap) {
+                setUnlocated(points);
                 showEmpty(mapCfg.hasMapKey ? "本地点位数据不可用，暂不加载地图。" : "缺少高德地图 Key，无法加载地图。");
                 setInfo(null);
                 return;
@@ -446,7 +684,9 @@
 
             try {
                 await ensureMapScript(mapCfg);
-                renderMap(points);
+                const convertedPoints = await convertPoints(points, mapCfg);
+                updateSummary(convertedPoints);
+                renderMap(convertedPoints);
             } catch (error) {
                 const message = error && error.message
                     ? error.message

@@ -81,8 +81,17 @@ public sealed class SqliteBootstrapper(
                 UNIQUE(deviceCode, abnormalClass, conclusion)
             );
 
+            CREATE TABLE IF NOT EXISTS DeviceMaintenance (
+                deviceCode TEXT NOT NULL PRIMARY KEY,
+                maintenanceStatus TEXT NOT NULL DEFAULT '',
+                maintenanceNote TEXT NOT NULL DEFAULT '',
+                manualConfirmationNote TEXT NOT NULL DEFAULT '',
+                updatedAt TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS IX_Device_GroupId ON Device(groupId);
             CREATE INDEX IF NOT EXISTS IX_InspectAbnormalPool_InspectAt ON InspectAbnormalPool(inspectAt DESC);
+            CREATE INDEX IF NOT EXISTS IX_DeviceMaintenance_UpdatedAt ON DeviceMaintenance(updatedAt DESC);
             """;
 
         await using var command = connection.CreateCommand();

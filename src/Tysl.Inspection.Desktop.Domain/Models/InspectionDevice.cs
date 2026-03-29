@@ -12,3 +12,10 @@ public sealed record InspectionDevice(
     int? BandStatus,
     int? SourceTypeFlag,
     DateTimeOffset SyncedAt);
+
+public sealed record DeviceUserMaintenance(
+    string DeviceCode,
+    string MaintenanceStatus,
+    string MaintenanceNote,
+    string ManualConfirmationNote,
+    DateTimeOffset UpdatedAt);

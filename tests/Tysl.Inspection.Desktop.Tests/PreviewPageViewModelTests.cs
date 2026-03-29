@@ -491,6 +491,89 @@ public sealed class PreviewPageViewModelTests
         Assert.Contains("当前异常池暂无异常项", viewModel.AbnormalListHintText);
     }
 
+    [Fact]
+    public async Task SaveSelectedDeviceMaintenanceAsync_LoadsAndSavesUserMaintenanceFields()
+    {
+        var previewService = new StubPreviewService
+        {
+            LoadResult = new PreviewDeviceLoadResult(
+                true,
+                string.Empty,
+                [new PreviewDeviceOption("dev-001", "测试设备", 1)],
+                [new PreviewDirectoryGroupItem(
+                    "group-001",
+                    "默认目录",
+                    null,
+                    string.Empty,
+                    1,
+                    1,
+                    false,
+                    [new PreviewDirectoryDeviceItem("dev-001", "测试设备", 1)])],
+                1,
+                1,
+                new GroupSyncSnapshotMetadata(1, 1, true, true, 1, 1, 1, "首层 regionCode：R-001"),
+                DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"))
+            {
+                DeviceDetailsByCode = new Dictionary<string, InspectionDevice>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["dev-001"] = new InspectionDevice(
+                        "dev-001",
+                        "测试设备",
+                        "group-001",
+                        "31.2304",
+                        "121.4737",
+                        "上海",
+                        1,
+                        1,
+                        1,
+                        0,
+                        DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"))
+                },
+                DeviceMaintenanceByCode = new Dictionary<string, DeviceUserMaintenance>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["dev-001"] = new DeviceUserMaintenance(
+                        "dev-001",
+                        "待人工核对",
+                        "需要补录维护备注。",
+                        "已电话联系现场。",
+                        DateTimeOffset.Parse("2026-03-29T09:30:00+08:00"))
+                }
+            },
+            SaveDeviceMaintenanceResult = new PreviewDeviceMaintenanceSaveResult(
+                true,
+                "用户维护信息已保存。",
+                new DeviceUserMaintenance(
+                    "dev-001",
+                    "已确认",
+                    "现场已完成复核。",
+                    "2026-03-29 现场口头确认恢复。",
+                    DateTimeOffset.Parse("2026-03-29T10:15:00+08:00")))
+        };
+        var viewModel = new PreviewPageViewModel(
+            previewService,
+            CreateStore(),
+            new StubPlayWinSvc(),
+            NullLogger<PreviewPageViewModel>.Instance);
+
+        await viewModel.InitializeAsync();
+
+        Assert.Equal("待人工核对", viewModel.SelectedDeviceMaintenanceStatusText);
+        Assert.Equal("需要补录维护备注。", viewModel.SelectedDeviceMaintenanceNoteText);
+        Assert.Equal("已电话联系现场。", viewModel.SelectedDeviceManualConfirmationNoteText);
+
+        viewModel.SelectedDeviceMaintenanceStatusText = "已确认";
+        viewModel.SelectedDeviceMaintenanceNoteText = "现场已完成复核。";
+        viewModel.SelectedDeviceManualConfirmationNoteText = "2026-03-29 现场口头确认恢复。";
+
+        await viewModel.SaveSelectedDeviceMaintenanceCommand.ExecuteAsync(null);
+
+        Assert.Equal("已确认", viewModel.SelectedDeviceMaintenanceStatusText);
+        Assert.Equal("现场已完成复核。", viewModel.SelectedDeviceMaintenanceNoteText);
+        Assert.Equal("2026-03-29 现场口头确认恢复。", viewModel.SelectedDeviceManualConfirmationNoteText);
+        Assert.Equal("2026-03-29 10:15:00", viewModel.SelectedDeviceMaintenanceUpdatedAtText);
+        Assert.Equal("dev-001", previewService.SavedDeviceCode);
+    }
+
     [Theory]
     [InlineData(PlayStage.Initializing, "正在初始化播放器")]
     [InlineData(PlayStage.Connecting, "正在建立播放链路")]
@@ -556,6 +639,11 @@ public sealed class PreviewPageViewModelTests
             "仅在发起巡检诊断后展示最小结果。",
             InspectAbnormalClass.None);
 
+        public PreviewDeviceMaintenanceSaveResult SaveDeviceMaintenanceResult { get; set; } =
+            new(true, "用户维护信息已保存。", null);
+
+        public string? SavedDeviceCode { get; private set; }
+
         public Task<PreviewDeviceLoadResult> LoadLocalDevicesAsync(CancellationToken cancellationToken)
         {
             return Task.FromResult(LoadResult);
@@ -569,6 +657,17 @@ public sealed class PreviewPageViewModelTests
         public Task<InspectResult> InspectAsync(string deviceCode, CancellationToken cancellationToken)
         {
             return Task.FromResult(InspectResult);
+        }
+
+        public Task<PreviewDeviceMaintenanceSaveResult> SaveDeviceMaintenanceAsync(
+            string deviceCode,
+            string maintenanceStatus,
+            string maintenanceNote,
+            string manualConfirmationNote,
+            CancellationToken cancellationToken)
+        {
+            SavedDeviceCode = deviceCode;
+            return Task.FromResult(SaveDeviceMaintenanceResult);
         }
     }
 

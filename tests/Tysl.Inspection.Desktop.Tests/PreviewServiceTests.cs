@@ -41,6 +41,31 @@ public sealed class PreviewServiceTests
     }
 
     [Fact]
+    public async Task LoadLocalDevicesAsync_ReturnsUserMaintenanceMap()
+    {
+        var store = new StubGroupSyncStore
+        {
+            Maintenance = new Dictionary<string, DeviceUserMaintenance>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["dev-001"] = new(
+                    "dev-001",
+                    "待人工核对",
+                    "需要复核现场支架角度。",
+                    "2026-03-29 人工确认需二次到场。",
+                    DateTimeOffset.Parse("2026-03-29T09:30:00+08:00"))
+            }
+        };
+        var service = CreateService(groupStore: store);
+
+        var result = await service.LoadLocalDevicesAsync(CancellationToken.None);
+
+        Assert.True(result.DeviceMaintenanceByCode.TryGetValue("dev-001", out var maintenance));
+        Assert.Equal("待人工核对", maintenance.MaintenanceStatus);
+        Assert.Equal("需要复核现场支架角度。", maintenance.MaintenanceNote);
+        Assert.Equal("2026-03-29 人工确认需二次到场。", maintenance.ManualConfirmationNote);
+    }
+
+    [Fact]
     public async Task LoadLocalDevicesAsync_KeepsUnlocatedDevices_AndEmptyDirectories()
     {
         var store = new StubGroupSyncStore
@@ -219,6 +244,27 @@ public sealed class PreviewServiceTests
         Assert.Equal("在线：可请求预览地址", result.DiagnosisText);
         Assert.Equal("RTSP 响应解密失败", result.AddressStatusText);
         Assert.True(client.PreviewUrlRequested);
+    }
+
+    [Fact]
+    public async Task SaveDeviceMaintenanceAsync_PersistsLatestUserMaintenance()
+    {
+        var store = new StubGroupSyncStore();
+        var service = CreateService(groupStore: store);
+
+        var result = await service.SaveDeviceMaintenanceAsync(
+            "dev-001",
+            "待人工核对",
+            "需要补录现场说明。",
+            "已联系现场人员，待复核。",
+            CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Maintenance);
+        Assert.True(store.Maintenance.TryGetValue("dev-001", out var saved));
+        Assert.Equal("待人工核对", saved.MaintenanceStatus);
+        Assert.Equal("需要补录现场说明。", saved.MaintenanceNote);
+        Assert.Equal("已联系现场人员，待复核。", saved.ManualConfirmationNote);
     }
 
     [Fact]
@@ -588,6 +634,8 @@ public sealed class PreviewServiceTests
         public GroupSyncSnapshotMetadata Metadata { get; set; } =
             new(1, 1, true, true, 1, 1, 1, "首层 regionCode：R-001");
 
+        public Dictionary<string, DeviceUserMaintenance> Maintenance { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
         public Task ReplaceGroupsAsync(IReadOnlyCollection<InspectionGroup> groups, CancellationToken cancellationToken)
         {
             Groups = groups.ToArray();
@@ -639,6 +687,17 @@ public sealed class PreviewServiceTests
         public Task<IReadOnlyList<InspectionDevice>> GetDevicesAsync(CancellationToken cancellationToken)
         {
             return Task.FromResult(Devices);
+        }
+
+        public Task<IReadOnlyDictionary<string, DeviceUserMaintenance>> GetDeviceMaintenanceMapAsync(CancellationToken cancellationToken)
+        {
+            return Task.FromResult<IReadOnlyDictionary<string, DeviceUserMaintenance>>(Maintenance);
+        }
+
+        public Task SaveDeviceMaintenanceAsync(DeviceUserMaintenance maintenance, CancellationToken cancellationToken)
+        {
+            Maintenance[maintenance.DeviceCode] = maintenance;
+            return Task.CompletedTask;
         }
 
         public Task<LocalSyncSnapshot> GetLocalSyncSnapshotAsync(CancellationToken cancellationToken)

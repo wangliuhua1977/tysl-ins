@@ -17,6 +17,7 @@ public sealed class PreviewService(
         {
             var groups = await groupSyncStore.GetGroupsAsync(cancellationToken);
             var devices = await groupSyncStore.GetDevicesAsync(cancellationToken);
+            var maintenanceByCode = await groupSyncStore.GetDeviceMaintenanceMapAsync(cancellationToken);
             var snapshot = await groupSyncStore.GetLocalSyncSnapshotAsync(cancellationToken);
             var deviceDetailsByCode = devices.ToDictionary(device => device.DeviceCode, StringComparer.OrdinalIgnoreCase);
             var devicesByGroup = devices.ToLookup(device => device.GroupId, StringComparer.OrdinalIgnoreCase);
@@ -66,6 +67,10 @@ public sealed class PreviewService(
                 emptyGroupCount,
                 snapshot.LastSyncedAt?.ToString("O") ?? "null");
 
+            logger.LogInformation(
+                "Loaded {MaintenanceCount} user maintenance items for preview page.",
+                maintenanceByCode.Count);
+
             if (snapshot.GroupCount != directoryGroups.Length || snapshot.DeviceCount != payload.Length)
             {
                 logger.LogWarning(
@@ -93,7 +98,8 @@ public sealed class PreviewService(
                 snapshot.Metadata,
                 snapshot.LastSyncedAt)
             {
-                DeviceDetailsByCode = deviceDetailsByCode
+                DeviceDetailsByCode = deviceDetailsByCode,
+                DeviceMaintenanceByCode = maintenanceByCode
             };
         }
         catch (Exception exception)
@@ -108,6 +114,50 @@ public sealed class PreviewService(
                 0,
                 GroupSyncSnapshotMetadata.Empty,
                 null);
+        }
+    }
+
+    public async Task<PreviewDeviceMaintenanceSaveResult> SaveDeviceMaintenanceAsync(
+        string deviceCode,
+        string maintenanceStatus,
+        string maintenanceNote,
+        string manualConfirmationNote,
+        CancellationToken cancellationToken)
+    {
+        logger.LogInformation("Saving user maintenance info for {DeviceCode}.", deviceCode);
+
+        try
+        {
+            var devices = await groupSyncStore.GetDevicesAsync(cancellationToken);
+            var device = devices.FirstOrDefault(item => string.Equals(item.DeviceCode, deviceCode, StringComparison.OrdinalIgnoreCase));
+            if (device is null)
+            {
+                logger.LogWarning("User maintenance save aborted because local device {DeviceCode} was not found.", deviceCode);
+                return new PreviewDeviceMaintenanceSaveResult(false, "当前点位不存在，请先完成同步。", null);
+            }
+
+            var maintenance = new DeviceUserMaintenance(
+                device.DeviceCode,
+                NormalizeInput(maintenanceStatus),
+                NormalizeInput(maintenanceNote),
+                NormalizeInput(manualConfirmationNote),
+                DateTimeOffset.Now);
+
+            await groupSyncStore.SaveDeviceMaintenanceAsync(maintenance, cancellationToken);
+
+            logger.LogInformation(
+                "User maintenance info saved for {DeviceCode}. HasStatus={HasStatus}, HasNote={HasNote}, HasManualConfirmation={HasManualConfirmation}.",
+                maintenance.DeviceCode,
+                !string.IsNullOrWhiteSpace(maintenance.MaintenanceStatus),
+                !string.IsNullOrWhiteSpace(maintenance.MaintenanceNote),
+                !string.IsNullOrWhiteSpace(maintenance.ManualConfirmationNote));
+
+            return new PreviewDeviceMaintenanceSaveResult(true, "用户维护信息已保存。", maintenance);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Failed to save user maintenance info for {DeviceCode}.", deviceCode);
+            return new PreviewDeviceMaintenanceSaveResult(false, BuildMaintenanceStoreMessage(exception), null);
         }
     }
 
@@ -626,12 +676,38 @@ public sealed class PreviewService(
         if (message.Contains("no such table", StringComparison.OrdinalIgnoreCase)
             || message.Contains("Device", StringComparison.OrdinalIgnoreCase)
             || message.Contains("Group", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("DeviceMaintenance", StringComparison.OrdinalIgnoreCase)
             || message.Contains("SyncMetadata", StringComparison.OrdinalIgnoreCase))
         {
-            return "本地 SQLite 中缺少目录 / 设备 / 同步元数据表，请先完成初始化或同步。";
+            return "本地 SQLite 中缺少目录 / 设备 / 用户维护 / 同步元数据表，请先完成初始化或同步。";
         }
 
         return $"本地点位读取失败：{message}";
+    }
+
+    private static string BuildMaintenanceStoreMessage(Exception exception)
+    {
+        var message = exception.Message;
+        if (message.Contains("unable to open database file", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("cannot open", StringComparison.OrdinalIgnoreCase))
+        {
+            return "本地 SQLite 文件不存在或无法打开，请先检查数据库路径。";
+        }
+
+        if (message.Contains("no such table", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("DeviceMaintenance", StringComparison.OrdinalIgnoreCase))
+        {
+            return "本地 SQLite 中缺少用户维护信息表，请先完成初始化。";
+        }
+
+        return $"用户维护信息保存失败：{message}";
+    }
+
+    private static string NormalizeInput(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value)
+            ? string.Empty
+            : value.Trim();
     }
 
     private static string MaskUrl(string? value)

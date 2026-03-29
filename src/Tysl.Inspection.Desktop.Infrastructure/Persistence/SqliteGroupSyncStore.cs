@@ -233,6 +233,72 @@ public sealed class SqliteGroupSyncStore(
         return devices;
     }
 
+    public async Task<IReadOnlyDictionary<string, DeviceUserMaintenance>> GetDeviceMaintenanceMapAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+                deviceCode,
+                maintenanceStatus,
+                maintenanceNote,
+                manualConfirmationNote,
+                updatedAt
+            FROM DeviceMaintenance
+            ORDER BY updatedAt DESC, deviceCode;
+            """;
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var items = new Dictionary<string, DeviceUserMaintenance>(StringComparer.OrdinalIgnoreCase);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var item = new DeviceUserMaintenance(
+                ReadString(reader, 0),
+                ReadString(reader, 1),
+                ReadString(reader, 2),
+                ReadString(reader, 3),
+                ReadSyncedAt(reader, 4));
+            items[item.DeviceCode] = item;
+        }
+
+        return items;
+    }
+
+    public async Task SaveDeviceMaintenanceAsync(DeviceUserMaintenance maintenance, CancellationToken cancellationToken)
+    {
+        await using var connection = CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO DeviceMaintenance(
+                deviceCode,
+                maintenanceStatus,
+                maintenanceNote,
+                manualConfirmationNote,
+                updatedAt)
+            VALUES(
+                @deviceCode,
+                @maintenanceStatus,
+                @maintenanceNote,
+                @manualConfirmationNote,
+                @updatedAt)
+            ON CONFLICT(deviceCode) DO UPDATE SET
+                maintenanceStatus = excluded.maintenanceStatus,
+                maintenanceNote = excluded.maintenanceNote,
+                manualConfirmationNote = excluded.manualConfirmationNote,
+                updatedAt = excluded.updatedAt;
+            """;
+        command.Parameters.AddWithValue("@deviceCode", maintenance.DeviceCode);
+        command.Parameters.AddWithValue("@maintenanceStatus", maintenance.MaintenanceStatus);
+        command.Parameters.AddWithValue("@maintenanceNote", maintenance.MaintenanceNote);
+        command.Parameters.AddWithValue("@manualConfirmationNote", maintenance.ManualConfirmationNote);
+        command.Parameters.AddWithValue("@updatedAt", maintenance.UpdatedAt.ToString("O", CultureInfo.InvariantCulture));
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     public async Task<LocalSyncSnapshot> GetLocalSyncSnapshotAsync(CancellationToken cancellationToken)
     {
         await using var connection = CreateConnection();

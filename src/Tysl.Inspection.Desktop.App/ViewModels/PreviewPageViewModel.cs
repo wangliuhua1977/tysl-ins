@@ -16,6 +16,7 @@ public sealed partial class PreviewPageViewModel(
 {
     private bool hasLoaded;
     private IReadOnlyDictionary<string, InspectionDevice> deviceDetailsByCode = new Dictionary<string, InspectionDevice>(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyDictionary<string, DeviceUserMaintenance> deviceMaintenanceByCode = new Dictionary<string, DeviceUserMaintenance>(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyDictionary<string, PreviewDirectoryGroupItem> directoryGroupById = new Dictionary<string, PreviewDirectoryGroupItem>(StringComparer.OrdinalIgnoreCase);
 
     public ObservableCollection<PreviewDeviceOption> Devices { get; } = [];
@@ -98,6 +99,33 @@ public sealed partial class PreviewPageViewModel(
 
     [ObservableProperty]
     private string selectedDeviceAbnormalPoolText = "异常池暂无该点位记录";
+
+    [ObservableProperty]
+    private string selectedDeviceAbnormalSummaryText = "异常池暂无该点位记录";
+
+    [ObservableProperty]
+    private string selectedDeviceHandleStatusText = "暂无";
+
+    [ObservableProperty]
+    private string selectedDeviceRecoveredStatusText = "暂无";
+
+    [ObservableProperty]
+    private string selectedDeviceCoordinateSourceText = "无平台坐标";
+
+    [ObservableProperty]
+    private string selectedDeviceMapCoordinateUsageText = "暂无";
+
+    [ObservableProperty]
+    private string selectedDeviceMaintenanceStatusText = string.Empty;
+
+    [ObservableProperty]
+    private string selectedDeviceMaintenanceNoteText = string.Empty;
+
+    [ObservableProperty]
+    private string selectedDeviceManualConfirmationNoteText = string.Empty;
+
+    [ObservableProperty]
+    private string selectedDeviceMaintenanceUpdatedAtText = "暂无";
 
     [ObservableProperty]
     private string diagnosisText = "尚未发起诊断";
@@ -201,6 +229,7 @@ public sealed partial class PreviewPageViewModel(
         var currentCode = SelectedDevice?.DeviceCode;
         var result = await previewService.LoadLocalDevicesAsync(CancellationToken.None);
         deviceDetailsByCode = result.DeviceDetailsByCode;
+        deviceMaintenanceByCode = result.DeviceMaintenanceByCode;
         directoryGroupById = result.DirectoryGroups.ToDictionary(group => group.GroupId, StringComparer.OrdinalIgnoreCase);
 
         Devices.Clear();
@@ -405,6 +434,51 @@ public sealed partial class PreviewPageViewModel(
         }
     }
 
+    [RelayCommand(CanExecute = nameof(CanSaveSelectedDeviceMaintenance))]
+    private async Task SaveSelectedDeviceMaintenanceAsync()
+    {
+        if (SelectedDevice is null)
+        {
+            return;
+        }
+
+        try
+        {
+            IsBusy = true;
+            PageStatusText = $"正在保存 {SelectedDevice.DeviceName} 的用户维护信息...";
+
+            var result = await previewService.SaveDeviceMaintenanceAsync(
+                SelectedDevice.DeviceCode,
+                SelectedDeviceMaintenanceStatusText,
+                SelectedDeviceMaintenanceNoteText,
+                SelectedDeviceManualConfirmationNoteText,
+                CancellationToken.None);
+
+            if (!result.Success || result.Maintenance is null)
+            {
+                PageStatusText = result.Message;
+                return;
+            }
+
+            deviceMaintenanceByCode = new Dictionary<string, DeviceUserMaintenance>(deviceMaintenanceByCode, StringComparer.OrdinalIgnoreCase)
+            {
+                [result.Maintenance.DeviceCode] = result.Maintenance
+            };
+
+            ApplySelectedDeviceMaintenance(result.Maintenance);
+            PageStatusText = $"{SelectedDevice.DeviceName} 的用户维护信息已保存。";
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Saving user maintenance info failed for {DeviceCode}.", SelectedDevice.DeviceCode);
+            PageStatusText = $"用户维护信息保存失败：{exception.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     [RelayCommand]
     private void ToggleReviewed(InspectAbnormalItem? item)
     {
@@ -483,6 +557,11 @@ public sealed partial class PreviewPageViewModel(
         return !IsBusy && item is not null;
     }
 
+    private bool CanSaveSelectedDeviceMaintenance()
+    {
+        return !IsBusy && SelectedDevice is not null;
+    }
+
     partial void OnSelectedDeviceChanged(PreviewDeviceOption? value)
     {
         if (value is null)
@@ -491,15 +570,22 @@ public sealed partial class PreviewPageViewModel(
         }
         else
         {
+            logger.LogInformation("Point detail load started for {DeviceCode}.", value.DeviceCode);
             ApplyDevice(value);
         }
 
         RequestPreviewCommand.NotifyCanExecuteChanged();
         RequestInspectCommand.NotifyCanExecuteChanged();
+        SaveSelectedDeviceMaintenanceCommand.NotifyCanExecuteChanged();
         OpenPlayWinCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(IsPlayWindowReady));
         OnPropertyChanged(nameof(PlayWindowHintText));
         RefreshSelectedDeviceDetailSummary();
+
+        if (value is not null)
+        {
+            LogSelectedDeviceDetailCompleted(value);
+        }
     }
 
     partial void OnIsBusyChanged(bool value)
@@ -507,6 +593,7 @@ public sealed partial class PreviewPageViewModel(
         RequestPreviewCommand.NotifyCanExecuteChanged();
         RequestInspectCommand.NotifyCanExecuteChanged();
         ReinspectCommand.NotifyCanExecuteChanged();
+        SaveSelectedDeviceMaintenanceCommand.NotifyCanExecuteChanged();
         OpenPlayWinCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(IsPlayWindowReady));
         OnPropertyChanged(nameof(PlayWindowHintText));
@@ -653,8 +740,19 @@ public sealed partial class PreviewPageViewModel(
         SelectedDeviceLatitudeText = detail?.Latitude ?? "未定位";
         SelectedDeviceLongitudeText = detail?.Longitude ?? "未定位";
         SelectedDeviceLocationText = string.IsNullOrWhiteSpace(detail?.Location) ? "暂无" : detail.Location!;
+        SelectedDeviceCoordinateSourceText = HasPlatformCoordinate(detail)
+            ? "百度（平台原始坐标）"
+            : "无平台坐标";
+        SelectedDeviceMapCoordinateUsageText = HasPlatformCoordinate(detail)
+            ? "地图页按高德 JS API 官方能力转换为高德坐标后渲染"
+            : "当前无可转换坐标";
         SelectedDeviceRecentInspectText = BuildRecentInspectText();
-        SelectedDeviceAbnormalPoolText = BuildAbnormalPoolText();
+        var latestAbnormal = GetLatestSelectedDeviceAbnormalItem();
+        SelectedDeviceAbnormalSummaryText = latestAbnormal?.SummaryText ?? "异常池暂无该点位记录";
+        SelectedDeviceHandleStatusText = latestAbnormal?.HandleStatusText ?? "暂无";
+        SelectedDeviceRecoveredStatusText = latestAbnormal?.RecoveredConfirmedText ?? "暂无";
+        SelectedDeviceAbnormalPoolText = BuildAbnormalPoolText(latestAbnormal);
+        ApplySelectedDeviceMaintenance(GetSelectedDeviceMaintenance());
     }
 
     private void ResetSelectedDeviceDetailSummary()
@@ -664,8 +762,14 @@ public sealed partial class PreviewPageViewModel(
         SelectedDeviceLatitudeText = "未定位";
         SelectedDeviceLongitudeText = "未定位";
         SelectedDeviceLocationText = "暂无";
+        SelectedDeviceCoordinateSourceText = "无平台坐标";
+        SelectedDeviceMapCoordinateUsageText = "暂无";
         SelectedDeviceRecentInspectText = "暂无最近巡检记录";
+        SelectedDeviceAbnormalSummaryText = "异常池暂无该点位记录";
+        SelectedDeviceHandleStatusText = "暂无";
+        SelectedDeviceRecoveredStatusText = "暂无";
         SelectedDeviceAbnormalPoolText = "异常池暂无该点位记录";
+        ApplySelectedDeviceMaintenance(null);
     }
 
     private InspectionDevice? GetSelectedDeviceDetail()
@@ -725,21 +829,24 @@ public sealed partial class PreviewPageViewModel(
             : $"{latest.InspectAtText} | {latest.Conclusion} | {latest.FailureCategory}";
     }
 
-    private string BuildAbnormalPoolText()
+    private InspectAbnormalItem? GetLatestSelectedDeviceAbnormalItem()
     {
         if (SelectedDevice is null)
         {
-            return "异常池暂无该点位记录";
+            return null;
         }
 
-        var latest = AbnormalItems
+        return AbnormalItems
             .Where(item => string.Equals(item.DeviceCode, SelectedDevice.DeviceCode, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(item => item.InspectAt)
             .FirstOrDefault();
+    }
 
+    private static string BuildAbnormalPoolText(InspectAbnormalItem? latest)
+    {
         return latest is null
             ? "异常池暂无该点位记录"
-            : $"{latest.HandleStatusText} | {latest.AbnormalClassText} | {latest.SummaryText}";
+            : $"{latest.HandleStatusText} | {latest.RecoveredConfirmedText} | {latest.AbnormalClassText} | {latest.SummaryText}";
     }
 
     private static string BuildOnlineStatusText(int? onlineStatus)
@@ -752,6 +859,43 @@ public sealed partial class PreviewPageViewModel(
             3 => "休眠（保活/AOV）",
             _ => "未知"
         };
+    }
+
+    private DeviceUserMaintenance? GetSelectedDeviceMaintenance()
+    {
+        return SelectedDevice is not null && deviceMaintenanceByCode.TryGetValue(SelectedDevice.DeviceCode, out var maintenance)
+            ? maintenance
+            : null;
+    }
+
+    private void ApplySelectedDeviceMaintenance(DeviceUserMaintenance? maintenance)
+    {
+        SelectedDeviceMaintenanceStatusText = maintenance?.MaintenanceStatus ?? string.Empty;
+        SelectedDeviceMaintenanceNoteText = maintenance?.MaintenanceNote ?? string.Empty;
+        SelectedDeviceManualConfirmationNoteText = maintenance?.ManualConfirmationNote ?? string.Empty;
+        SelectedDeviceMaintenanceUpdatedAtText = maintenance is null
+            ? "暂无"
+            : maintenance.UpdatedAt.ToString("yyyy-MM-dd HH:mm:ss");
+    }
+
+    private void LogSelectedDeviceDetailCompleted(PreviewDeviceOption device)
+    {
+        var detail = GetSelectedDeviceDetail();
+        var abnormal = GetLatestSelectedDeviceAbnormalItem();
+        var maintenance = GetSelectedDeviceMaintenance();
+        logger.LogInformation(
+            "Point detail load completed for {DeviceCode}. HasCoordinate={HasCoordinate}, HasLocation={HasLocation}, HasAbnormal={HasAbnormal}, HasMaintenance={HasMaintenance}.",
+            device.DeviceCode,
+            HasPlatformCoordinate(detail),
+            !string.IsNullOrWhiteSpace(detail?.Location),
+            abnormal is not null,
+            maintenance is not null);
+    }
+
+    private static bool HasPlatformCoordinate(InspectionDevice? detail)
+    {
+        return !string.IsNullOrWhiteSpace(detail?.Latitude)
+            && !string.IsNullOrWhiteSpace(detail?.Longitude);
     }
 
     private void ApplyDirectorySummary(PreviewDeviceLoadResult result)
