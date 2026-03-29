@@ -1,11 +1,13 @@
 using Microsoft.Extensions.Logging;
 using Tysl.Inspection.Desktop.Application.Abstractions;
 using Tysl.Inspection.Desktop.Contracts.OpenPlatform;
+using Tysl.Inspection.Desktop.Domain.Models;
 
 namespace Tysl.Inspection.Desktop.Application.Services;
 
 public sealed class PreviewService(
     IMapStore mapStore,
+    IGroupSyncStore groupSyncStore,
     IOpenPlatformClient openPlatformClient,
     IPlayProbe playProbe,
     ILogger<PreviewService> logger) : IPreviewService
@@ -14,21 +16,47 @@ public sealed class PreviewService(
     {
         try
         {
+            var groups = await groupSyncStore.GetGroupsAsync(cancellationToken);
             var devices = await mapStore.GetDevicesAsync(cancellationToken);
+            var snapshot = await groupSyncStore.GetLocalSyncSnapshotAsync(cancellationToken);
+
             var payload = devices
                 .OrderBy(device => device.DeviceName, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(device => device.DeviceCode, StringComparer.OrdinalIgnoreCase)
                 .Select(device => new PreviewDeviceOption(device.DeviceCode, device.DeviceName, device.OnlineStatus))
                 .ToArray();
 
-            logger.LogInformation("Loaded {DeviceCount} local devices for single preview page.", payload.Length);
+            var directoryGroups = groups
+                .OrderBy(group => group.GroupName, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(group => group.GroupId, StringComparer.OrdinalIgnoreCase)
+                .Select(group => new PreviewDirectoryGroupItem(
+                    group.GroupId,
+                    group.GroupName,
+                    devices
+                        .Where(device => string.Equals(device.GroupId, group.GroupId, StringComparison.OrdinalIgnoreCase))
+                        .OrderBy(device => device.DeviceName, StringComparer.OrdinalIgnoreCase)
+                        .ThenBy(device => device.DeviceCode, StringComparer.OrdinalIgnoreCase)
+                        .Select(device => new PreviewDirectoryDeviceItem(device.DeviceCode, device.DeviceName, device.OnlineStatus))
+                        .ToArray()))
+                .ToArray();
 
-            return new PreviewDeviceLoadResult(true, string.Empty, payload);
+            logger.LogInformation(
+                "Loaded real device directory for preview page. Groups={GroupCount}, Devices={DeviceCount}, LastSyncedAt={LastSyncedAt}.",
+                directoryGroups.Length,
+                payload.Length,
+                snapshot.LastSyncedAt?.ToString("O") ?? "null");
+
+            return new PreviewDeviceLoadResult(true, string.Empty, payload, directoryGroups, snapshot.LastSyncedAt);
         }
         catch (Exception exception)
         {
-            logger.LogError(exception, "Failed to load local devices for single preview page.");
-            return new PreviewDeviceLoadResult(false, BuildSqliteMessage(exception), Array.Empty<PreviewDeviceOption>());
+            logger.LogError(exception, "Failed to load real device directory for preview page.");
+            return new PreviewDeviceLoadResult(
+                false,
+                BuildSqliteMessage(exception),
+                Array.Empty<PreviewDeviceOption>(),
+                Array.Empty<PreviewDirectoryGroupItem>(),
+                null);
         }
     }
 
@@ -88,7 +116,7 @@ public sealed class PreviewService(
         {
             logger.LogError(exception, "Unexpected single-device preview failure for {DeviceCode}.", deviceCode);
             return BuildResult(
-                success: false,
+                false,
                 deviceCode,
                 "未知设备",
                 $"单点预览准备失败：{exception.Message}",
@@ -123,57 +151,57 @@ public sealed class PreviewService(
             {
                 result = BuildInspectResult(
                     flow,
-                    statusResolved: false,
-                    onlineStatus: "未找到本地点位",
-                    rtspReady: false,
-                    playbackStarted: false,
-                    enteredPlaying: false,
-                    conclusion: "巡检失败：本地点位不存在",
-                    failureCategory: "本地点位不存在",
-                    detailMessage: flow.DiagnosisText,
-                    abnormalClass: InspectAbnormalClass.None);
+                    false,
+                    "未找到本地点位",
+                    false,
+                    false,
+                    false,
+                    "巡检失败：本地点位不存在",
+                    "本地点位不存在",
+                    flow.DiagnosisText,
+                    InspectAbnormalClass.None);
             }
             else if (!flow.StatusResolved)
             {
                 result = BuildInspectResult(
                     flow,
-                    statusResolved: false,
-                    onlineStatus: "未获取",
-                    rtspReady: false,
-                    playbackStarted: false,
-                    enteredPlaying: false,
-                    conclusion: "巡检失败：设备状态未获取",
-                    failureCategory: ExtractStatusFailureCategory(flow.DiagnosisText),
-                    detailMessage: flow.DiagnosisText,
-                    abnormalClass: InspectAbnormalClass.None);
+                    false,
+                    "未获取",
+                    false,
+                    false,
+                    false,
+                    "巡检失败：设备状态未获取",
+                    ExtractStatusFailureCategory(flow.DiagnosisText),
+                    flow.DiagnosisText,
+                    InspectAbnormalClass.None);
             }
             else if (flow.OnlineStatus is not 1)
             {
                 result = BuildInspectResult(
                     flow,
-                    statusResolved: true,
-                    onlineStatus: BuildOnlineStatusText(flow.OnlineStatus),
-                    rtspReady: false,
-                    playbackStarted: false,
-                    enteredPlaying: false,
-                    conclusion: BuildNonPlayingConclusion(flow.OnlineStatus),
-                    failureCategory: BuildNonPlayingFailureCategory(flow.OnlineStatus),
-                    detailMessage: flow.DiagnosisText,
-                    abnormalClass: InspectAbnormalClass.Offline);
+                    true,
+                    BuildOnlineStatusText(flow.OnlineStatus),
+                    false,
+                    false,
+                    false,
+                    BuildNonPlayingConclusion(flow.OnlineStatus),
+                    BuildNonPlayingFailureCategory(flow.OnlineStatus),
+                    flow.DiagnosisText,
+                    InspectAbnormalClass.Offline);
             }
             else if (!flow.RtspReady || string.IsNullOrWhiteSpace(flow.RtspUrl))
             {
                 result = BuildInspectResult(
                     flow,
-                    statusResolved: true,
-                    onlineStatus: BuildOnlineStatusText(flow.OnlineStatus),
-                    rtspReady: false,
-                    playbackStarted: false,
-                    enteredPlaying: false,
-                    conclusion: "巡检失败：RTSP 地址未就绪",
-                    failureCategory: ExtractRtspFailureCategory(flow.AddressStatusText),
-                    detailMessage: flow.AddressStatusText,
-                    abnormalClass: InspectAbnormalClass.RtspNotReady);
+                    true,
+                    BuildOnlineStatusText(flow.OnlineStatus),
+                    false,
+                    false,
+                    false,
+                    "巡检失败：RTSP 未就绪",
+                    ExtractRtspFailureCategory(flow.AddressStatusText),
+                    flow.AddressStatusText,
+                    InspectAbnormalClass.RtspNotReady);
             }
             else
             {
@@ -427,15 +455,15 @@ public sealed class PreviewService(
         {
             return BuildInspectResult(
                 flow,
-                statusResolved: true,
-                onlineStatus: BuildOnlineStatusText(flow.OnlineStatus),
-                rtspReady: true,
-                playbackStarted: probeResult.PlaybackStarted || probeResult.EnteredPlaying,
-                enteredPlaying: true,
-                conclusion: "巡检通过",
-                failureCategory: string.Empty,
-                detailMessage: "播放器已进入 Playing 播放态；当前轮仅确认播放态，实际画面仍需人工复核。",
-                abnormalClass: InspectAbnormalClass.None);
+                true,
+                BuildOnlineStatusText(flow.OnlineStatus),
+                true,
+                probeResult.PlaybackStarted || probeResult.EnteredPlaying,
+                true,
+                "巡检通过",
+                string.Empty,
+                "播放器已进入 Playing 播放态；当前轮仅确认播放态，实际画面仍需人工复核。",
+                InspectAbnormalClass.None);
         }
 
         var failureCategory = string.IsNullOrWhiteSpace(probeResult.FailureCategory)
@@ -444,22 +472,22 @@ public sealed class PreviewService(
 
         return BuildInspectResult(
             flow,
-            statusResolved: true,
-            onlineStatus: BuildOnlineStatusText(flow.OnlineStatus),
-            rtspReady: true,
-            playbackStarted: probeResult.PlaybackStarted,
-            enteredPlaying: false,
-            conclusion: failureCategory switch
+            true,
+            BuildOnlineStatusText(flow.OnlineStatus),
+            true,
+            probeResult.PlaybackStarted,
+            false,
+            failureCategory switch
             {
                 "播放初始化失败" => "巡检失败：播放初始化失败",
-                "播放建链失败" => "巡检失败：播放建链失败",
-                "播放过程中断" => "巡检失败：播放过程中断",
-                "地址可能失效" => "巡检失败：地址可能失效",
-                _ => "巡检失败：播放建链失败"
+                "播放建链失败" => "巡检失败：播放失败",
+                "播放过程中断" => "巡检失败：播放失败",
+                "地址可能失效" => "巡检失败：播放失败",
+                _ => "巡检失败：播放失败"
             },
-            failureCategory: failureCategory,
-            detailMessage: probeResult.DetailMessage,
-            abnormalClass: InspectAbnormalClass.PlayFailed);
+            failureCategory,
+            probeResult.DetailMessage,
+            InspectAbnormalClass.PlayFailed);
     }
 
     private void LogAbnormalClass(PreviewFlow flow, InspectResult result)
@@ -486,8 +514,8 @@ public sealed class PreviewService(
         return onlineStatus switch
         {
             0 => "巡检失败：设备离线",
-            2 => "巡检失败：设备休眠",
-            3 => "巡检失败：设备休眠",
+            2 => "巡检失败：设备离线",
+            3 => "巡检失败：设备离线",
             _ => "巡检失败：设备状态未知"
         };
     }
@@ -545,9 +573,10 @@ public sealed class PreviewService(
         }
 
         if (message.Contains("no such table", StringComparison.OrdinalIgnoreCase)
-            || message.Contains("Device", StringComparison.OrdinalIgnoreCase))
+            || message.Contains("Device", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("Group", StringComparison.OrdinalIgnoreCase))
         {
-            return "本地 SQLite 中缺少 Device 表，请先完成初始化或同步。";
+            return "本地 SQLite 中缺少 Group / Device 表，请先完成初始化或同步。";
         }
 
         return $"本地点位读取失败：{message}";

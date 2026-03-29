@@ -17,10 +17,15 @@ public sealed partial class PreviewPageViewModel(
 
     public ObservableCollection<PreviewDeviceOption> Devices { get; } = [];
 
+    public ObservableCollection<PreviewDirectoryGroupItem> DirectoryGroups { get; } = [];
+
     public ObservableCollection<InspectAbnormalItem> AbnormalItems { get; } = [];
 
     [ObservableProperty]
     private string pageStatusText = "正在加载本地点位...";
+
+    [ObservableProperty]
+    private string directoryStatusText = "正在加载真实设备目录...";
 
     [ObservableProperty]
     private bool isBusy;
@@ -77,8 +82,8 @@ public sealed partial class PreviewPageViewModel(
         : "请先成功获取 RTSP 地址后再打开播放窗口。";
 
     public string AbnormalListHintText => AbnormalItems.Count > 0
-        ? $"当前异常池共 {AbnormalItems.Count} 条，已持久化到本地 SQLite；“已复核”仅表示人工已看过，处置状态独立记录最小收口。"
-        : "当前异常池暂无异常项；巡检通过不会进入异常池。";
+        ? $"当前异常池共 {AbnormalItems.Count} 条；“已复核”“处置状态”“已恢复确认”相互独立，恢复确认仅在复检通过后标记。"
+        : "当前异常池暂无异常项；复检通过会在原记录上标记“已恢复确认”。";
 
     public async Task InitializeAsync()
     {
@@ -94,10 +99,13 @@ public sealed partial class PreviewPageViewModel(
     public async Task RefreshAsync()
     {
         PageStatusText = "正在加载本地点位...";
+        DirectoryStatusText = "正在加载真实设备目录...";
 
         var currentCode = SelectedDevice?.DeviceCode;
         var result = await previewService.LoadLocalDevicesAsync(CancellationToken.None);
+
         Devices.Clear();
+        DirectoryGroups.Clear();
         ReloadAbnormalItems();
 
         foreach (var device in result.Devices)
@@ -105,17 +113,34 @@ public sealed partial class PreviewPageViewModel(
             Devices.Add(device);
         }
 
+        foreach (var group in result.DirectoryGroups)
+        {
+            DirectoryGroups.Add(group);
+        }
+
         if (!result.Success)
         {
             PageStatusText = result.Message;
+            DirectoryStatusText = result.Message;
             SelectedDevice = null;
             ResetPreviewResult();
+            logger.LogWarning("Real directory load failed for UI binding. Message={Message}.", result.Message);
             return;
         }
 
+        DirectoryStatusText = DirectoryGroups.Count > 0
+            ? BuildDirectoryStatusText(DirectoryGroups.Count, Devices.Count, result.LastSyncedAt)
+            : "本地 SQLite 中暂无真实目录数据，请先完成同步。";
+
         PageStatusText = Devices.Count > 0
-            ? $"已加载 {Devices.Count} 个本地点位，可直接发起单点预览准备。"
-            : "本地 SQLite 中暂时无点位数据，请先完成同步。";
+            ? $"已加载 {Devices.Count} 个点位，可直接发起单点预览或巡检。"
+            : "本地 SQLite 中暂无点位数据，请先完成同步。";
+
+        logger.LogInformation(
+            "Real directory loaded and bound to UI. Groups={GroupCount}, Devices={DeviceCount}, LastSyncedAt={LastSyncedAt}.",
+            DirectoryGroups.Count,
+            Devices.Count,
+            result.LastSyncedAt?.ToString("O") ?? "null");
 
         SelectedDevice = Devices.FirstOrDefault(device => string.Equals(device.DeviceCode, currentCode, StringComparison.OrdinalIgnoreCase))
             ?? Devices.FirstOrDefault();
@@ -209,6 +234,54 @@ public sealed partial class PreviewPageViewModel(
         }
     }
 
+    [RelayCommand(CanExecute = nameof(CanReinspect))]
+    private async Task ReinspectAsync(InspectAbnormalItem? item)
+    {
+        if (item is null)
+        {
+            return;
+        }
+
+        try
+        {
+            IsBusy = true;
+            SelectDeviceByCode(item.DeviceCode);
+            PageStatusText = $"正在对 {item.DeviceName} 执行异常复检...";
+            logger.LogInformation("Inspect abnormal reinspect started for {DeviceCode}.", item.DeviceCode);
+
+            var result = await previewService.InspectAsync(item.DeviceCode, CancellationToken.None);
+            ApplyInspect(result);
+
+            var updated = abnormalStore.Reinspect(item.Id, result);
+            ReloadAbnormalItems();
+
+            if (updated is null)
+            {
+                PageStatusText = "异常复检完成，但原异常记录不存在。";
+                logger.LogWarning("Inspect abnormal reinspect completed but original item not found. AbnormalId={AbnormalId}.", item.Id);
+                return;
+            }
+
+            PageStatusText = updated.IsRecoveredConfirmed
+                ? $"{updated.DeviceName} 复检通过，已恢复确认。"
+                : $"{updated.DeviceName} 复检完成，已更新原异常记录。";
+
+            logger.LogInformation(
+                "Inspect abnormal reinspect completed for {DeviceCode}. RecoveredConfirmed={RecoveredConfirmed}.",
+                updated.DeviceCode,
+                updated.IsRecoveredConfirmed);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Inspect abnormal reinspect failed for {DeviceCode}.", item.DeviceCode);
+            PageStatusText = $"异常复检失败：{exception.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     [RelayCommand]
     private void ToggleReviewed(InspectAbnormalItem? item)
     {
@@ -243,6 +316,18 @@ public sealed partial class PreviewPageViewModel(
         ReplaceAbnormalItem(item, updated);
     }
 
+    [RelayCommand]
+    private void SelectDirectoryDevice(PreviewDirectoryDeviceItem? item)
+    {
+        if (item is null)
+        {
+            return;
+        }
+
+        SelectDeviceByCode(item.DeviceCode);
+        PageStatusText = $"已选中 {item.DeviceName}，可继续获取预览地址或执行巡检。";
+    }
+
     [RelayCommand(CanExecute = nameof(CanOpenPlayWindow))]
     private void OpenPlayWin()
     {
@@ -270,6 +355,11 @@ public sealed partial class PreviewPageViewModel(
         return !IsBusy && SelectedDevice is not null;
     }
 
+    private bool CanReinspect(InspectAbnormalItem? item)
+    {
+        return !IsBusy && item is not null;
+    }
+
     partial void OnSelectedDeviceChanged(PreviewDeviceOption? value)
     {
         if (value is null)
@@ -292,6 +382,7 @@ public sealed partial class PreviewPageViewModel(
     {
         RequestPreviewCommand.NotifyCanExecuteChanged();
         RequestInspectCommand.NotifyCanExecuteChanged();
+        ReinspectCommand.NotifyCanExecuteChanged();
         OpenPlayWinCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(IsPlayWindowReady));
         OnPropertyChanged(nameof(PlayWindowHintText));
@@ -413,5 +504,20 @@ public sealed partial class PreviewPageViewModel(
         }
 
         OnPropertyChanged(nameof(AbnormalListHintText));
+    }
+
+    private void SelectDeviceByCode(string deviceCode)
+    {
+        SelectedDevice = Devices.FirstOrDefault(device => string.Equals(device.DeviceCode, deviceCode, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string BuildDirectoryStatusText(int groupCount, int deviceCount, DateTimeOffset? lastSyncedAt)
+    {
+        if (lastSyncedAt is null)
+        {
+            return $"已加载 {groupCount} 个分组、{deviceCount} 个点位。";
+        }
+
+        return $"已加载 {groupCount} 个分组、{deviceCount} 个点位；最近同步 {lastSyncedAt:yyyy-MM-dd HH:mm:ss}。";
     }
 }

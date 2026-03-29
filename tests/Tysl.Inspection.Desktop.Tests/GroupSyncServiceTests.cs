@@ -180,6 +180,11 @@ public sealed class GroupSyncServiceTests
                 lastSyncedAt == default ? null : lastSyncedAt));
         }
 
+        public Task<IReadOnlyList<InspectionGroup>> GetGroupsAsync(CancellationToken cancellationToken)
+        {
+            return Task.FromResult<IReadOnlyList<InspectionGroup>>(groups.ToArray());
+        }
+
         public Task<LocalSyncSnapshot> GetLocalSyncSnapshotAsync(CancellationToken cancellationToken)
         {
             var allDevices = devicesByGroup.Values.SelectMany(list => list).ToArray();

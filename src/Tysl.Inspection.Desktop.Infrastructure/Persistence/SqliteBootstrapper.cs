@@ -52,6 +52,9 @@ public sealed class SqliteBootstrapper(
                 failureCategory TEXT NOT NULL DEFAULT '',
                 dispositionSummary TEXT NOT NULL,
                 isReviewed INTEGER NOT NULL DEFAULT 0,
+                isRecoveredConfirmed INTEGER NOT NULL DEFAULT 0,
+                recoveredConfirmedAt TEXT NULL,
+                recoveredSummary TEXT NOT NULL DEFAULT '',
                 handleStatus INTEGER NOT NULL DEFAULT 1,
                 handleStatusText TEXT NOT NULL DEFAULT '待处理',
                 handleUpdatedAt TEXT NOT NULL DEFAULT '',
@@ -116,6 +119,30 @@ public sealed class SqliteBootstrapper(
                 cancellationToken);
         }
 
+        if (!columns.Contains("isRecoveredConfirmed"))
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                "ALTER TABLE InspectAbnormalPool ADD COLUMN isRecoveredConfirmed INTEGER NOT NULL DEFAULT 0;",
+                cancellationToken);
+        }
+
+        if (!columns.Contains("recoveredConfirmedAt"))
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                "ALTER TABLE InspectAbnormalPool ADD COLUMN recoveredConfirmedAt TEXT NULL;",
+                cancellationToken);
+        }
+
+        if (!columns.Contains("recoveredSummary"))
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                "ALTER TABLE InspectAbnormalPool ADD COLUMN recoveredSummary TEXT NOT NULL DEFAULT '';",
+                cancellationToken);
+        }
+
         await ExecuteNonQueryAsync(
             connection,
             """
@@ -145,6 +172,26 @@ public sealed class SqliteBootstrapper(
             SET handleUpdatedAt = CASE
                 WHEN handleUpdatedAt IS NULL OR handleUpdatedAt = '' THEN updatedAt
                 ELSE handleUpdatedAt
+            END;
+            """,
+            cancellationToken);
+        await ExecuteNonQueryAsync(
+            connection,
+            """
+            UPDATE InspectAbnormalPool
+            SET isRecoveredConfirmed = CASE
+                WHEN isRecoveredConfirmed = 1 THEN 1
+                ELSE 0
+            END;
+            """,
+            cancellationToken);
+        await ExecuteNonQueryAsync(
+            connection,
+            """
+            UPDATE InspectAbnormalPool
+            SET recoveredSummary = CASE
+                WHEN recoveredSummary IS NULL THEN ''
+                ELSE recoveredSummary
             END;
             """,
             cancellationToken);

@@ -18,11 +18,11 @@
                 <TextBlock FontSize="24"
                            FontWeight="SemiBold"
                            Foreground="White"
-                           Text="单点预览与巡检诊断" />
+                           Text="单点预览、异常复检与真实目录" />
                 <TextBlock Margin="0,8,0,0"
                            Foreground="#F3F4F6"
                            TextWrapping="Wrap"
-                           Text="从本地 SQLite 选择一个点位，可继续做单点预览，也可直接执行一次最小巡检诊断。" />
+                           Text="继续复用现有单点巡检链路，在同一页内完成真实分组目录查看、单点预览、异常池复检和最小恢复确认。" />
                 <TextBlock Margin="0,8,0,0"
                            Foreground="#DDE7F2"
                            TextWrapping="Wrap"
@@ -37,7 +37,7 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="380" />
+                <ColumnDefinition Width="420" />
                 <ColumnDefinition Width="12" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
@@ -51,11 +51,89 @@
                     <TextBlock FontSize="18"
                                FontWeight="SemiBold"
                                Foreground="{DynamicResource PrimaryTextBrush}"
-                               Text="预览入口" />
+                               Text="真实设备目录与点位" />
                     <TextBlock Margin="0,8,0,0"
                                Foreground="{DynamicResource SecondaryTextBrush}"
                                TextWrapping="Wrap"
-                               Text="先获取 RTSP 地址，再打开独立播放窗口播放，不改当前 Tab 结构。" />
+                               Text="{Binding DirectoryStatusText}" />
+
+                    <Border Margin="0,16,0,0"
+                            Padding="12"
+                            Background="{DynamicResource WindowBackgroundBrush}"
+                            BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="16">
+                        <ScrollViewer MaxHeight="260"
+                                      VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding DirectoryGroups}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Expander Margin="0,0,0,12"
+                                                  Padding="8"
+                                                  IsExpanded="True"
+                                                  Background="{DynamicResource CardBrush}"
+                                                  Foreground="{DynamicResource PrimaryTextBrush}">
+                                            <Expander.Header>
+                                                <TextBlock FontWeight="SemiBold"
+                                                           Text="{Binding DisplayText}" />
+                                            </Expander.Header>
+                                            <ItemsControl ItemsSource="{Binding Devices}">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Margin="0,8,0,0"
+                                                                Padding="12"
+                                                                Background="{DynamicResource WindowBackgroundBrush}"
+                                                                BorderBrush="{DynamicResource CardBorderBrush}"
+                                                                BorderThickness="1"
+                                                                CornerRadius="12">
+                                                            <Grid>
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="*" />
+                                                                    <ColumnDefinition Width="Auto" />
+                                                                </Grid.ColumnDefinitions>
+
+                                                                <StackPanel>
+                                                                    <TextBlock FontWeight="SemiBold"
+                                                                               Foreground="{DynamicResource PrimaryTextBrush}"
+                                                                               Text="{Binding DeviceName}" />
+                                                                    <TextBlock Margin="0,4,0,0"
+                                                                               Foreground="{DynamicResource SecondaryTextBrush}"
+                                                                               Text="{Binding DeviceCode}" />
+                                                                    <TextBlock Margin="0,4,0,0"
+                                                                               Foreground="{DynamicResource SecondaryTextBrush}"
+                                                                               Text="{Binding OnlineStatusText}" />
+                                                                </StackPanel>
+
+                                                                <Button Grid.Column="1"
+                                                                        Padding="14,8"
+                                                                        Command="{Binding DataContext.SelectDirectoryDeviceCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                                        CommandParameter="{Binding}"
+                                                                        Content="选中" />
+                                                            </Grid>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </Expander>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Border>
+
+                    <Border Margin="0,20,0,0"
+                            Height="1"
+                            Background="{DynamicResource CardBorderBrush}" />
+
+                    <TextBlock Margin="0,20,0,0"
+                               FontSize="18"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource PrimaryTextBrush}"
+                               Text="单点预览入口" />
+                    <TextBlock Margin="0,8,0,0"
+                               Foreground="{DynamicResource SecondaryTextBrush}"
+                               TextWrapping="Wrap"
+                               Text="继续先获取 RTSP 地址，再打开独立播放窗口；单点巡检与异常复检共用同一条现有链路。" />
 
                     <TextBlock Margin="0,20,0,6"
                                Foreground="{DynamicResource SecondaryTextBrush}"
@@ -281,7 +359,7 @@
                                Text="{Binding AbnormalListHintText}" />
 
                     <ScrollViewer Margin="0,16,0,0"
-                                  MaxHeight="320"
+                                  MaxHeight="360"
                                   VerticalScrollBarVisibility="Auto">
                         <ItemsControl ItemsSource="{Binding AbnormalItems}">
                             <ItemsControl.ItemTemplate>
@@ -294,6 +372,7 @@
                                             CornerRadius="16">
                                         <Grid>
                                             <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
                                                 <RowDefinition Height="Auto" />
                                                 <RowDefinition Height="Auto" />
                                                 <RowDefinition Height="Auto" />
@@ -314,6 +393,11 @@
 
                                             <StackPanel Grid.Column="1">
                                                 <Button Padding="14,8"
+                                                        Command="{Binding DataContext.ReinspectCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                        CommandParameter="{Binding}"
+                                                        Content="复检" />
+                                                <Button Margin="0,8,0,0"
+                                                        Padding="14,8"
                                                         Command="{Binding DataContext.AdvanceHandleStatusCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                         CommandParameter="{Binding}"
                                                         Content="{Binding HandleActionText}" />
@@ -337,6 +421,8 @@
                                                 <Run Text="{Binding ReviewedText}" />
                                                 <Run Text="    处置状态：" />
                                                 <Run Text="{Binding HandleStatusText}" />
+                                                <Run Text="    已恢复确认：" />
+                                                <Run Text="{Binding RecoveredConfirmedText}" />
                                             </TextBlock>
 
                                             <TextBlock Grid.Row="2"
@@ -345,6 +431,17 @@
                                                        Foreground="{DynamicResource SecondaryTextBrush}"
                                                        TextWrapping="Wrap"
                                                        Text="{Binding SummaryText}" />
+
+                                            <TextBlock Grid.Row="3"
+                                                       Grid.ColumnSpan="2"
+                                                       Margin="0,12,0,0"
+                                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                                       TextWrapping="Wrap">
+                                                <Run Text="恢复确认时间：" />
+                                                <Run Text="{Binding RecoveredConfirmedAtText}" />
+                                                <Run Text="    恢复说明：" />
+                                                <Run Text="{Binding RecoveredSummaryText}" />
+                                            </TextBlock>
                                         </Grid>
                                     </Border>
                                 </DataTemplate>

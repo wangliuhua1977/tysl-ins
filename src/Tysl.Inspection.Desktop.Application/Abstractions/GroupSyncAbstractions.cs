@@ -20,6 +20,8 @@ public interface IGroupSyncStore
 
     Task<OverviewStats> GetOverviewStatsAsync(CancellationToken cancellationToken);
 
+    Task<IReadOnlyList<InspectionGroup>> GetGroupsAsync(CancellationToken cancellationToken);
+
     Task<LocalSyncSnapshot> GetLocalSyncSnapshotAsync(CancellationToken cancellationToken);
 }
 
@@ -60,6 +62,8 @@ public interface IInspectAbnormalStore
 
     InspectAbnormalItem? Add(InspectResult result);
 
+    InspectAbnormalItem? Reinspect(Guid id, InspectResult result);
+
     InspectAbnormalItem? ToggleReviewed(Guid id);
 
     InspectAbnormalItem? AdvanceHandleStatus(Guid id);
@@ -70,6 +74,10 @@ public interface IInspectAbnormalPoolStore
     IReadOnlyList<InspectAbnormalItem> LoadItems();
 
     void Upsert(InspectAbnormalItem item);
+
+    void Replace(InspectAbnormalItem item);
+
+    void Delete(Guid id);
 }
 
 public interface IPlayProbe
@@ -90,10 +98,37 @@ public sealed record PreviewDeviceOption(
     public string DisplayText => $"{DeviceName} ({DeviceCode})";
 }
 
+public sealed record PreviewDirectoryDeviceItem(
+    string DeviceCode,
+    string DeviceName,
+    int? OnlineStatus)
+{
+    public string DisplayText => $"{DeviceName} ({DeviceCode})";
+
+    public string OnlineStatusText => OnlineStatus switch
+    {
+        1 => "在线",
+        0 => "离线",
+        2 => "休眠（普通）",
+        3 => "休眠（保活/AOV）",
+        _ => "状态未知"
+    };
+}
+
+public sealed record PreviewDirectoryGroupItem(
+    string GroupId,
+    string GroupName,
+    IReadOnlyList<PreviewDirectoryDeviceItem> Devices)
+{
+    public string DisplayText => $"{GroupName} ({Devices.Count})";
+}
+
 public sealed record PreviewDeviceLoadResult(
     bool Success,
     string Message,
-    IReadOnlyList<PreviewDeviceOption> Devices);
+    IReadOnlyList<PreviewDeviceOption> Devices,
+    IReadOnlyList<PreviewDirectoryGroupItem> DirectoryGroups,
+    DateTimeOffset? LastSyncedAt);
 
 public sealed record PreviewPrepareResult(
     bool Success,
@@ -127,12 +162,15 @@ public sealed record InspectAbnormalItem(
     string FailureCategory,
     string SummaryText,
     bool IsReviewed,
+    bool IsRecoveredConfirmed,
+    DateTimeOffset? RecoveredConfirmedAt,
+    string RecoveredSummary,
     InspectHandleStatus HandleStatus,
     string HandleStatusText,
     DateTimeOffset HandleUpdatedAt,
     DateTimeOffset UpdatedAt)
 {
-    public string DeviceDisplayText => $"{DeviceName}（{DeviceCode}）";
+    public string DeviceDisplayText => $"{DeviceName} ({DeviceCode})";
 
     public string InspectAtText => InspectAt.ToString("yyyy-MM-dd HH:mm:ss");
 
@@ -141,6 +179,12 @@ public sealed record InspectAbnormalItem(
     public string ReviewedText => IsReviewed ? "已复核" : "未复核";
 
     public string ReviewActionText => IsReviewed ? "取消已复核" : "标记已复核";
+
+    public string RecoveredConfirmedText => IsRecoveredConfirmed ? "已恢复确认" : "未恢复确认";
+
+    public string RecoveredConfirmedAtText => RecoveredConfirmedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "暂无";
+
+    public string RecoveredSummaryText => string.IsNullOrWhiteSpace(RecoveredSummary) ? "暂无" : RecoveredSummary;
 
     public string HandleActionText => HandleStatus switch
     {
@@ -253,7 +297,7 @@ public sealed record InspectResult(
     {
         if (!IsAbnormal && ContainsKeyword(DetailMessage, "Playing"))
         {
-            return "播放器已进入播放态，画面内容仍需人工复核。";
+            return "播放器已进入 Playing 状态，画面内容仍需人工复核。";
         }
 
         return SanitizeSummaryText(string.IsNullOrWhiteSpace(DetailMessage)
@@ -282,7 +326,7 @@ public sealed record InspectResult(
 
     private static string ReplaceRtspSegment(string value, string scheme)
     {
-        const string replacement = "RTSP 地址不展示地址明文";
+        const string replacement = "RTSP 地址不展示明文";
         var start = value.IndexOf(scheme, StringComparison.OrdinalIgnoreCase);
 
         while (start >= 0)

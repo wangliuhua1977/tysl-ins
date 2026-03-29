@@ -9,6 +9,25 @@ namespace Tysl.Inspection.Desktop.Tests;
 public sealed class PreviewPageViewModelTests
 {
     [Fact]
+    public async Task InitializeAsync_LoadsRealDirectoryIntoUi()
+    {
+        var viewModel = new PreviewPageViewModel(
+            new StubPreviewService(),
+            CreateStore(),
+            new StubPlayWinSvc(),
+            NullLogger<PreviewPageViewModel>.Instance);
+
+        await viewModel.InitializeAsync();
+
+        var group = Assert.Single(viewModel.DirectoryGroups);
+        Assert.Equal("默认分组", group.GroupName);
+        var device = Assert.Single(group.Devices);
+        Assert.Equal("测试设备", device.DeviceName);
+        Assert.Equal("在线", device.OnlineStatusText);
+        Assert.Contains("已加载 1 个分组、1 个点位", viewModel.DirectoryStatusText);
+    }
+
+    [Fact]
     public async Task InitializeAsync_DisablesPlayWindow_WhenRtspAddressIsNotReady()
     {
         var previewService = new StubPreviewService();
@@ -76,7 +95,7 @@ public sealed class PreviewPageViewModelTests
                 true,
                 true,
                 false,
-                "巡检失败：播放建链失败",
+                "巡检失败：播放失败",
                 "播放建链失败",
                 "播放器未能完成播放建链。",
                 InspectAbnormalClass.PlayFailed)
@@ -90,7 +109,7 @@ public sealed class PreviewPageViewModelTests
         await viewModel.InitializeAsync();
         await viewModel.RequestInspectCommand.ExecuteAsync(null);
 
-        Assert.Equal("巡检失败：播放建链失败", viewModel.InspectConclusion);
+        Assert.Equal("巡检失败：播放失败", viewModel.InspectConclusion);
         Assert.Equal("播放失败", viewModel.InspectAbnormalClassText);
         Assert.Equal("播放建链失败", viewModel.InspectFailureCategory);
         Assert.Contains("在线状态：在线", viewModel.InspectStageText);
@@ -117,7 +136,7 @@ public sealed class PreviewPageViewModelTests
                 true,
                 true,
                 false,
-                "巡检失败：播放建链失败",
+                "巡检失败：播放失败",
                 "播放建链失败",
                 "播放器未能完成播放建链。",
                 InspectAbnormalClass.PlayFailed)
@@ -136,6 +155,7 @@ public sealed class PreviewPageViewModelTests
         Assert.Equal("播放失败", item.AbnormalClassText);
         Assert.Equal("未复核", item.ReviewedText);
         Assert.Equal("待处理", item.HandleStatusText);
+        Assert.Equal("未恢复确认", item.RecoveredConfirmedText);
         Assert.Contains("当前异常池共 1 条", viewModel.AbnormalListHintText);
 
         viewModel.AdvanceHandleStatusCommand.Execute(item);
@@ -144,11 +164,117 @@ public sealed class PreviewPageViewModelTests
         Assert.Equal(InspectHandleStatus.InProgress, handling.HandleStatus);
         Assert.Equal("处理中", handling.HandleStatusText);
 
-        viewModel.ToggleReviewedCommand.Execute(item);
+        viewModel.ToggleReviewedCommand.Execute(handling);
 
         var updated = Assert.Single(viewModel.AbnormalItems);
         Assert.True(updated.IsReviewed);
         Assert.Equal("已复核", updated.ReviewedText);
+    }
+
+    [Fact]
+    public async Task ReinspectAsync_UpdatesOriginalItem_WhenStillAbnormal()
+    {
+        var previewService = new StubPreviewService
+        {
+            InspectResult = new InspectResult(
+                DateTimeOffset.Parse("2026-03-28T10:05:00+08:00"),
+                "测试设备",
+                "dev-001",
+                true,
+                "在线",
+                true,
+                true,
+                false,
+                "巡检失败：播放失败",
+                "播放建链失败",
+                "播放器未能完成播放建链。",
+                InspectAbnormalClass.PlayFailed)
+        };
+        var viewModel = new PreviewPageViewModel(
+            previewService,
+            CreateStore(),
+            new StubPlayWinSvc(),
+            NullLogger<PreviewPageViewModel>.Instance);
+
+        await viewModel.InitializeAsync();
+        await viewModel.RequestInspectCommand.ExecuteAsync(null);
+
+        var existing = Assert.Single(viewModel.AbnormalItems);
+        previewService.InspectResult = new InspectResult(
+            DateTimeOffset.Parse("2026-03-28T10:10:00+08:00"),
+            "测试设备",
+            "dev-001",
+            true,
+            "在线",
+            false,
+            false,
+            false,
+            "巡检失败：RTSP 未就绪",
+            "RTSP 响应解密失败",
+            "RTSP 响应解密失败。",
+            InspectAbnormalClass.RtspNotReady);
+
+        await viewModel.ReinspectCommand.ExecuteAsync(existing);
+
+        var updated = Assert.Single(viewModel.AbnormalItems);
+        Assert.Equal(existing.Id, updated.Id);
+        Assert.Equal("巡检失败：RTSP 未就绪", updated.Conclusion);
+        Assert.Equal("RTSP 未就绪", updated.AbnormalClassText);
+        Assert.False(updated.IsRecoveredConfirmed);
+        Assert.Contains("已更新原异常记录", viewModel.PageStatusText);
+    }
+
+    [Fact]
+    public async Task ReinspectAsync_MarksRecoveredConfirmed_WhenInspectPasses()
+    {
+        var previewService = new StubPreviewService
+        {
+            InspectResult = new InspectResult(
+                DateTimeOffset.Parse("2026-03-28T10:05:00+08:00"),
+                "测试设备",
+                "dev-001",
+                true,
+                "在线",
+                true,
+                true,
+                false,
+                "巡检失败：播放失败",
+                "播放建链失败",
+                "播放器未能完成播放建链。",
+                InspectAbnormalClass.PlayFailed)
+        };
+        var viewModel = new PreviewPageViewModel(
+            previewService,
+            CreateStore(),
+            new StubPlayWinSvc(),
+            NullLogger<PreviewPageViewModel>.Instance);
+
+        await viewModel.InitializeAsync();
+        await viewModel.RequestInspectCommand.ExecuteAsync(null);
+
+        var existing = Assert.Single(viewModel.AbnormalItems);
+        previewService.InspectResult = new InspectResult(
+            DateTimeOffset.Parse("2026-03-28T10:12:00+08:00"),
+            "测试设备",
+            "dev-001",
+            true,
+            "在线",
+            true,
+            true,
+            true,
+            "巡检通过",
+            string.Empty,
+            "播放器已进入 Playing 播放态。",
+            InspectAbnormalClass.None);
+
+        await viewModel.ReinspectCommand.ExecuteAsync(existing);
+
+        var updated = Assert.Single(viewModel.AbnormalItems);
+        Assert.Equal(existing.Id, updated.Id);
+        Assert.True(updated.IsRecoveredConfirmed);
+        Assert.Equal("已恢复确认", updated.RecoveredConfirmedText);
+        Assert.Contains("复检通过", updated.RecoveredSummary);
+        Assert.Contains("已恢复确认", viewModel.PageStatusText);
     }
 
     [Fact]
@@ -165,7 +291,7 @@ public sealed class PreviewPageViewModelTests
                 true,
                 true,
                 false,
-                "巡检失败：播放建链失败",
+                "巡检失败：播放失败",
                 "播放建链失败",
                 "播放器未能完成播放建链。",
                 InspectAbnormalClass.PlayFailed)
@@ -272,6 +398,16 @@ public sealed class PreviewPageViewModelTests
 
     private sealed class StubPreviewService : IPreviewService
     {
+        public PreviewDeviceLoadResult LoadResult { get; set; } = new(
+            true,
+            string.Empty,
+            [new PreviewDeviceOption("dev-001", "测试设备", 1)],
+            [new PreviewDirectoryGroupItem(
+                "group-001",
+                "默认分组",
+                [new PreviewDirectoryDeviceItem("dev-001", "测试设备", 1)])],
+            DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"));
+
         public PreviewPrepareResult PrepareResult { get; set; } = new(
             false,
             "dev-001",
@@ -298,11 +434,7 @@ public sealed class PreviewPageViewModelTests
 
         public Task<PreviewDeviceLoadResult> LoadLocalDevicesAsync(CancellationToken cancellationToken)
         {
-            return Task.FromResult(
-                new PreviewDeviceLoadResult(
-                    true,
-                    string.Empty,
-                    [new PreviewDeviceOption("dev-001", "测试设备", 1)]));
+            return Task.FromResult(LoadResult);
         }
 
         public Task<PreviewPrepareResult> PrepareAsync(string deviceCode, CancellationToken cancellationToken)
@@ -354,6 +486,27 @@ public sealed class PreviewPageViewModelTests
             }
 
             items.Add(item);
+        }
+
+        public void Replace(InspectAbnormalItem item)
+        {
+            var index = items.FindIndex(current => current.Id == item.Id);
+            if (index >= 0)
+            {
+                items[index] = item;
+                return;
+            }
+
+            items.Add(item);
+        }
+
+        public void Delete(Guid id)
+        {
+            var index = items.FindIndex(current => current.Id == id);
+            if (index >= 0)
+            {
+                items.RemoveAt(index);
+            }
         }
     }
 }

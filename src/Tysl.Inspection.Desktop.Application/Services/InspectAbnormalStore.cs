@@ -33,17 +33,20 @@ public sealed class InspectAbnormalStore(
             {
                 InspectAt = result.InspectAt,
                 DeviceName = result.DeviceName,
+                DeviceCode = result.DeviceCode,
                 AbnormalClass = result.AbnormalClass,
                 AbnormalClassText = result.AbnormalClassText,
                 Conclusion = result.Conclusion,
                 FailureCategory = result.FailureCategory,
                 SummaryText = result.BuildDispositionSummary(),
+                IsRecoveredConfirmed = false,
+                RecoveredConfirmedAt = null,
+                RecoveredSummary = string.Empty,
                 UpdatedAt = result.InspectAt
             };
 
-            TryPersist(updated);
-            items.RemoveAt(index);
-            items.Insert(0, updated);
+            TryUpsert(updated);
+            MoveToTop(index, updated);
 
             logger.LogInformation(
                 "Inspect abnormal hit dedup and updated abnormal pool for {DeviceCode}. AbnormalClass={AbnormalClass}, Conclusion={Conclusion}.",
@@ -65,12 +68,15 @@ public sealed class InspectAbnormalStore(
             result.FailureCategory,
             result.BuildDispositionSummary(),
             false,
+            false,
+            null,
+            string.Empty,
             InspectHandleStatus.Pending,
             InspectAbnormalItem.BuildHandleStatusText(InspectHandleStatus.Pending),
             result.InspectAt,
             result.InspectAt);
 
-        TryPersist(item);
+        TryUpsert(item);
         items.Insert(0, item);
 
         logger.LogInformation(
@@ -83,6 +89,94 @@ public sealed class InspectAbnormalStore(
             item.AbnormalClassText);
 
         return item;
+    }
+
+    public InspectAbnormalItem? Reinspect(Guid id, InspectResult result)
+    {
+        EnsureLoaded();
+
+        var index = items.FindIndex(item => item.Id == id);
+        if (index < 0)
+        {
+            return null;
+        }
+
+        var current = items[index];
+        if (!result.IsAbnormal)
+        {
+            var recovered = current with
+            {
+                InspectAt = result.InspectAt,
+                DeviceName = result.DeviceName,
+                DeviceCode = result.DeviceCode,
+                IsRecoveredConfirmed = true,
+                RecoveredConfirmedAt = result.InspectAt,
+                RecoveredSummary = BuildRecoveredSummary(result),
+                UpdatedAt = result.InspectAt
+            };
+
+            TryReplace(recovered);
+            MoveToTop(index, recovered);
+
+            logger.LogInformation(
+                "Inspect abnormal recovered confirmed for {DeviceCode}. RecoveredConfirmedAt={RecoveredConfirmedAt}.",
+                recovered.DeviceCode,
+                recovered.RecoveredConfirmedAt);
+
+            return recovered;
+        }
+
+        var abnormalClass = CanAdd(result) ? result.AbnormalClass : current.AbnormalClass;
+        var abnormalClassText = CanAdd(result) ? result.AbnormalClassText : current.AbnormalClassText;
+        var duplicateIndex = items.FindIndex(item =>
+            item.Id != current.Id
+            && string.Equals(item.DeviceCode, result.DeviceCode, StringComparison.OrdinalIgnoreCase)
+            && item.AbnormalClass == abnormalClass
+            && string.Equals(item.Conclusion, result.Conclusion, StringComparison.Ordinal));
+
+        if (duplicateIndex >= 0)
+        {
+            var duplicate = items[duplicateIndex];
+            TryDelete(duplicate.Id);
+            items.RemoveAt(duplicateIndex);
+
+            if (duplicateIndex < index)
+            {
+                index--;
+            }
+
+            logger.LogInformation(
+                "Inspect abnormal reinspect removed duplicate item for {DeviceCode}. DuplicateId={DuplicateId}.",
+                duplicate.DeviceCode,
+                duplicate.Id);
+        }
+
+        var updated = current with
+        {
+            InspectAt = result.InspectAt,
+            DeviceName = result.DeviceName,
+            DeviceCode = result.DeviceCode,
+            AbnormalClass = abnormalClass,
+            AbnormalClassText = abnormalClassText,
+            Conclusion = result.Conclusion,
+            FailureCategory = result.FailureCategory,
+            SummaryText = result.BuildDispositionSummary(),
+            IsRecoveredConfirmed = false,
+            RecoveredConfirmedAt = null,
+            RecoveredSummary = string.Empty,
+            UpdatedAt = result.InspectAt
+        };
+
+        TryReplace(updated);
+        MoveToTop(index, updated);
+
+        logger.LogInformation(
+            "Inspect abnormal reinspect updated original item for {DeviceCode}. AbnormalClass={AbnormalClass}, Conclusion={Conclusion}.",
+            updated.DeviceCode,
+            updated.AbnormalClassText,
+            updated.Conclusion);
+
+        return updated;
     }
 
     public InspectAbnormalItem? ToggleReviewed(Guid id)
@@ -101,7 +195,7 @@ public sealed class InspectAbnormalStore(
             UpdatedAt = DateTimeOffset.Now
         };
 
-        TryPersist(updated);
+        TryUpsert(updated);
         items[index] = updated;
 
         logger.LogInformation(
@@ -132,7 +226,7 @@ public sealed class InspectAbnormalStore(
             UpdatedAt = updatedAt
         };
 
-        TryPersist(updated);
+        TryUpsert(updated);
         items[index] = updated;
 
         logger.LogInformation(
@@ -148,6 +242,11 @@ public sealed class InspectAbnormalStore(
         return result.AbnormalClass is InspectAbnormalClass.Offline
             or InspectAbnormalClass.RtspNotReady
             or InspectAbnormalClass.PlayFailed;
+    }
+
+    private static string BuildRecoveredSummary(InspectResult result)
+    {
+        return $"复检通过，已确认恢复；{result.BuildDispositionSummary()}";
     }
 
     private void EnsureLoaded()
@@ -184,7 +283,7 @@ public sealed class InspectAbnormalStore(
         }
     }
 
-    private void TryPersist(InspectAbnormalItem item)
+    private void TryUpsert(InspectAbnormalItem item)
     {
         try
         {
@@ -197,6 +296,39 @@ public sealed class InspectAbnormalStore(
                 "Failed to persist inspect abnormal pool item for {DeviceCode}.",
                 item.DeviceCode);
         }
+    }
+
+    private void TryReplace(InspectAbnormalItem item)
+    {
+        try
+        {
+            abnormalPoolStore.Replace(item);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(
+                exception,
+                "Failed to replace inspect abnormal pool item for {DeviceCode}.",
+                item.DeviceCode);
+        }
+    }
+
+    private void TryDelete(Guid id)
+    {
+        try
+        {
+            abnormalPoolStore.Delete(id);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Failed to delete duplicate inspect abnormal pool item {AbnormalId}.", id);
+        }
+    }
+
+    private void MoveToTop(int index, InspectAbnormalItem item)
+    {
+        items.RemoveAt(index);
+        items.Insert(0, item);
     }
 
     private int FindIndex(string deviceCode, InspectAbnormalClass abnormalClass, string conclusion)

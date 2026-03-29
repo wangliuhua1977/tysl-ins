@@ -161,6 +161,36 @@ public sealed class SqliteGroupSyncStore(
         return new OverviewStats(totalPoints, onlineCount, offlineCount, unlocatedCount, lastSyncedAt);
     }
 
+    public async Task<IReadOnlyList<InspectionGroup>> GetGroupsAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+                groupId,
+                groupName,
+                deviceCount,
+                syncedAt
+            FROM "Group"
+            ORDER BY groupName COLLATE NOCASE, groupId;
+            """;
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var groups = new List<InspectionGroup>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            groups.Add(new InspectionGroup(
+                ReadString(reader, 0),
+                ReadString(reader, 1),
+                ReadInt32(reader, 2),
+                ReadSyncedAt(reader, 3)));
+        }
+
+        return groups;
+    }
+
     public async Task<LocalSyncSnapshot> GetLocalSyncSnapshotAsync(CancellationToken cancellationToken)
     {
         await using var connection = CreateConnection();
@@ -209,5 +239,40 @@ public sealed class SqliteGroupSyncStore(
         return DateTimeOffset.TryParse(result.ToString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
             ? parsed
             : null;
+    }
+
+    private static string ReadString(SqliteDataReader reader, int ordinal)
+    {
+        return reader.IsDBNull(ordinal) ? string.Empty : reader.GetString(ordinal);
+    }
+
+    private static int ReadInt32(SqliteDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal))
+        {
+            return 0;
+        }
+
+        var value = reader.GetValue(ordinal);
+        return value switch
+        {
+            long longValue => Convert.ToInt32(longValue, CultureInfo.InvariantCulture),
+            int intValue => intValue,
+            _ when int.TryParse(value.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) => parsed,
+            _ => 0
+        };
+    }
+
+    private static DateTimeOffset ReadSyncedAt(SqliteDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal))
+        {
+            return DateTimeOffset.UtcNow;
+        }
+
+        var text = reader.GetString(ordinal);
+        return DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
+            ? parsed
+            : DateTimeOffset.UtcNow;
     }
 }

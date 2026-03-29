@@ -28,6 +28,9 @@ public sealed class SqliteInspectAbnormalPoolStore(
                 failureCategory,
                 dispositionSummary,
                 isReviewed,
+                isRecoveredConfirmed,
+                recoveredConfirmedAt,
+                recoveredSummary,
                 handleStatus,
                 handleStatusText,
                 handleUpdatedAt,
@@ -41,8 +44,8 @@ public sealed class SqliteInspectAbnormalPoolStore(
         while (reader.Read())
         {
             var inspectAt = ReadDateTimeOffset(reader, 3);
-            var handleStatus = ReadHandleStatus(reader, 10);
-            var updatedAt = ReadDateTimeOffset(reader, 13);
+            var handleStatus = ReadHandleStatus(reader, 13);
+            var updatedAt = ReadDateTimeOffset(reader, 16);
             items.Add(new InspectAbnormalItem(
                 ReadGuid(reader, 0),
                 inspectAt,
@@ -54,9 +57,12 @@ public sealed class SqliteInspectAbnormalPoolStore(
                 ReadString(reader, 7),
                 ReadString(reader, 8),
                 ReadBoolean(reader, 9),
+                ReadBoolean(reader, 10),
+                ReadNullableDateTimeOffset(reader, 11),
+                ReadString(reader, 12),
                 handleStatus,
-                ReadHandleStatusText(reader, 11, handleStatus),
-                ReadDateTimeOffset(reader, 12, updatedAt),
+                ReadHandleStatusText(reader, 14, handleStatus),
+                ReadDateTimeOffset(reader, 15, updatedAt),
                 updatedAt));
         }
 
@@ -81,6 +87,9 @@ public sealed class SqliteInspectAbnormalPoolStore(
                 failureCategory,
                 dispositionSummary,
                 isReviewed,
+                isRecoveredConfirmed,
+                recoveredConfirmedAt,
+                recoveredSummary,
                 handleStatus,
                 handleStatusText,
                 handleUpdatedAt,
@@ -96,6 +105,9 @@ public sealed class SqliteInspectAbnormalPoolStore(
                 @failureCategory,
                 @dispositionSummary,
                 @isReviewed,
+                @isRecoveredConfirmed,
+                @recoveredConfirmedAt,
+                @recoveredSummary,
                 @handleStatus,
                 @handleStatusText,
                 @handleUpdatedAt,
@@ -107,11 +119,113 @@ public sealed class SqliteInspectAbnormalPoolStore(
                 failureCategory = excluded.failureCategory,
                 dispositionSummary = excluded.dispositionSummary,
                 isReviewed = excluded.isReviewed,
+                isRecoveredConfirmed = excluded.isRecoveredConfirmed,
+                recoveredConfirmedAt = excluded.recoveredConfirmedAt,
+                recoveredSummary = excluded.recoveredSummary,
                 handleStatus = excluded.handleStatus,
                 handleStatusText = excluded.handleStatusText,
                 handleUpdatedAt = excluded.handleUpdatedAt,
                 updatedAt = excluded.updatedAt;
             """;
+        BindItem(command, item);
+        command.ExecuteNonQuery();
+    }
+
+    public void Replace(InspectAbnormalItem item)
+    {
+        using var connection = CreateConnection();
+        connection.Open();
+
+        using var updateCommand = connection.CreateCommand();
+        updateCommand.CommandText = """
+            UPDATE InspectAbnormalPool
+            SET
+                deviceCode = @deviceCode,
+                deviceName = @deviceName,
+                inspectAt = @inspectAt,
+                abnormalClass = @abnormalClass,
+                abnormalClassText = @abnormalClassText,
+                conclusion = @conclusion,
+                failureCategory = @failureCategory,
+                dispositionSummary = @dispositionSummary,
+                isReviewed = @isReviewed,
+                isRecoveredConfirmed = @isRecoveredConfirmed,
+                recoveredConfirmedAt = @recoveredConfirmedAt,
+                recoveredSummary = @recoveredSummary,
+                handleStatus = @handleStatus,
+                handleStatusText = @handleStatusText,
+                handleUpdatedAt = @handleUpdatedAt,
+                updatedAt = @updatedAt
+            WHERE id = @id;
+            """;
+        BindItem(updateCommand, item);
+        var updatedRows = updateCommand.ExecuteNonQuery();
+        if (updatedRows > 0)
+        {
+            return;
+        }
+
+        using var insertCommand = connection.CreateCommand();
+        insertCommand.CommandText = """
+            INSERT INTO InspectAbnormalPool(
+                id,
+                deviceCode,
+                deviceName,
+                inspectAt,
+                abnormalClass,
+                abnormalClassText,
+                conclusion,
+                failureCategory,
+                dispositionSummary,
+                isReviewed,
+                isRecoveredConfirmed,
+                recoveredConfirmedAt,
+                recoveredSummary,
+                handleStatus,
+                handleStatusText,
+                handleUpdatedAt,
+                updatedAt)
+            VALUES(
+                @id,
+                @deviceCode,
+                @deviceName,
+                @inspectAt,
+                @abnormalClass,
+                @abnormalClassText,
+                @conclusion,
+                @failureCategory,
+                @dispositionSummary,
+                @isReviewed,
+                @isRecoveredConfirmed,
+                @recoveredConfirmedAt,
+                @recoveredSummary,
+                @handleStatus,
+                @handleStatusText,
+                @handleUpdatedAt,
+                @updatedAt);
+            """;
+        BindItem(insertCommand, item);
+        insertCommand.ExecuteNonQuery();
+    }
+
+    public void Delete(Guid id)
+    {
+        using var connection = CreateConnection();
+        connection.Open();
+
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM InspectAbnormalPool WHERE id = @id;";
+        command.Parameters.AddWithValue("@id", id.ToString("D"));
+        command.ExecuteNonQuery();
+    }
+
+    private SqliteConnection CreateConnection()
+    {
+        return new SqliteConnection(SqliteBootstrapper.BuildConnectionString(databaseOptions.Value, runtimePaths));
+    }
+
+    private static void BindItem(SqliteCommand command, InspectAbnormalItem item)
+    {
         command.Parameters.AddWithValue("@id", item.Id.ToString("D"));
         command.Parameters.AddWithValue("@deviceCode", item.DeviceCode);
         command.Parameters.AddWithValue("@deviceName", item.DeviceName);
@@ -122,16 +236,13 @@ public sealed class SqliteInspectAbnormalPoolStore(
         command.Parameters.AddWithValue("@failureCategory", item.FailureCategory);
         command.Parameters.AddWithValue("@dispositionSummary", item.SummaryText);
         command.Parameters.AddWithValue("@isReviewed", item.IsReviewed ? 1 : 0);
+        command.Parameters.AddWithValue("@isRecoveredConfirmed", item.IsRecoveredConfirmed ? 1 : 0);
+        command.Parameters.AddWithValue("@recoveredConfirmedAt", item.RecoveredConfirmedAt?.ToString("O", CultureInfo.InvariantCulture) ?? (object)DBNull.Value);
+        command.Parameters.AddWithValue("@recoveredSummary", item.RecoveredSummary);
         command.Parameters.AddWithValue("@handleStatus", (int)item.HandleStatus);
         command.Parameters.AddWithValue("@handleStatusText", item.HandleStatusText);
         command.Parameters.AddWithValue("@handleUpdatedAt", item.HandleUpdatedAt.ToString("O", CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("@updatedAt", item.UpdatedAt.ToString("O", CultureInfo.InvariantCulture));
-        command.ExecuteNonQuery();
-    }
-
-    private SqliteConnection CreateConnection()
-    {
-        return new SqliteConnection(SqliteBootstrapper.BuildConnectionString(databaseOptions.Value, runtimePaths));
     }
 
     private static string ReadString(SqliteDataReader reader, int ordinal)
@@ -179,6 +290,19 @@ public sealed class SqliteInspectAbnormalPoolStore(
         return DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var value)
             ? value
             : fallbackValue;
+    }
+
+    private static DateTimeOffset? ReadNullableDateTimeOffset(SqliteDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal))
+        {
+            return null;
+        }
+
+        var text = reader.GetString(ordinal);
+        return DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var value)
+            ? value
+            : null;
     }
 
     private static InspectAbnormalClass ReadAbnormalClass(SqliteDataReader reader, int ordinal)

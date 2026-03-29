@@ -9,6 +9,23 @@ namespace Tysl.Inspection.Desktop.Tests;
 public sealed class PreviewServiceTests
 {
     [Fact]
+    public async Task LoadLocalDevicesAsync_ReturnsGroupedRealDirectory()
+    {
+        var service = CreateService();
+
+        var result = await service.LoadLocalDevicesAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Single(result.Devices);
+        var group = Assert.Single(result.DirectoryGroups);
+        Assert.Equal("默认分组", group.GroupName);
+        var device = Assert.Single(group.Devices);
+        Assert.Equal("测试设备", device.DeviceName);
+        Assert.Equal("在线", device.OnlineStatusText);
+        Assert.Equal(DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"), result.LastSyncedAt);
+    }
+
+    [Fact]
     public async Task PrepareAsync_ReturnsOfflineDiagnosis_WithoutRequestingPreviewUrl()
     {
         var client = new StubOpenPlatformClient
@@ -20,7 +37,7 @@ public sealed class PreviewServiceTests
                 Payload = new OpenPlatformDeviceStatusPayload("dev-001", 0)
             }
         };
-        var service = new PreviewService(new InMemoryMapStore(), client, new StubPlayProbe(), NullLogger<PreviewService>.Instance);
+        var service = CreateService(client);
 
         var result = await service.PrepareAsync("dev-001", CancellationToken.None);
 
@@ -42,7 +59,7 @@ public sealed class PreviewServiceTests
                 Payload = new OpenPlatformDeviceStatusPayload("dev-001", 2)
             }
         };
-        var service = new PreviewService(new InMemoryMapStore(), client, new StubPlayProbe(), NullLogger<PreviewService>.Instance);
+        var service = CreateService(client);
 
         var result = await service.PrepareAsync("dev-001", CancellationToken.None);
 
@@ -63,7 +80,7 @@ public sealed class PreviewServiceTests
                 ErrorMessage = "接口超时"
             }
         };
-        var service = new PreviewService(new InMemoryMapStore(), client, new StubPlayProbe(), NullLogger<PreviewService>.Instance);
+        var service = CreateService(client);
 
         var result = await service.PrepareAsync("dev-001", CancellationToken.None);
 
@@ -90,7 +107,7 @@ public sealed class PreviewServiceTests
                 Payload = new OpenPlatformPreviewUrlPayload("rtsp://demo/live/dev-001", "600 秒")
             }
         };
-        var service = new PreviewService(new InMemoryMapStore(), client, new StubPlayProbe(), NullLogger<PreviewService>.Instance);
+        var service = CreateService(client);
 
         var result = await service.PrepareAsync("dev-001", CancellationToken.None);
 
@@ -119,7 +136,7 @@ public sealed class PreviewServiceTests
                 ErrorMessage = "RTSP 响应解密失败"
             }
         };
-        var service = new PreviewService(new InMemoryMapStore(), client, new StubPlayProbe(), NullLogger<PreviewService>.Instance);
+        var service = CreateService(client);
 
         var result = await service.PrepareAsync("dev-001", CancellationToken.None);
 
@@ -142,7 +159,7 @@ public sealed class PreviewServiceTests
             }
         };
         var probe = new StubPlayProbe();
-        var service = new PreviewService(new InMemoryMapStore(), client, probe, NullLogger<PreviewService>.Instance);
+        var service = CreateService(client, probe: probe);
 
         var result = await service.InspectAsync("dev-001", CancellationToken.None);
 
@@ -183,21 +200,21 @@ public sealed class PreviewServiceTests
             }
         };
         var probe = new StubPlayProbe();
-        var service = new PreviewService(new InMemoryMapStore(), client, probe, NullLogger<PreviewService>.Instance);
+        var service = CreateService(client, probe: probe);
 
         var result = await service.InspectAsync("dev-001", CancellationToken.None);
 
         Assert.True(result.StatusResolved);
         Assert.Equal("在线", result.OnlineStatus);
         Assert.False(result.RtspReady);
-        Assert.Equal("巡检失败：RTSP 地址未就绪", result.Conclusion);
+        Assert.Equal("巡检失败：RTSP 未就绪", result.Conclusion);
         Assert.Equal("RTSP 响应解密失败", result.FailureCategory);
         Assert.Equal("RTSP 响应解密失败", result.DetailMessage);
         Assert.True(result.IsAbnormal);
         Assert.Equal(InspectAbnormalClass.RtspNotReady, result.AbnormalClass);
         Assert.Equal("RTSP 未就绪", result.AbnormalClassText);
         var summary = result.BuildDispositionSummary();
-        Assert.Contains("结论：巡检失败：RTSP 地址未就绪", summary);
+        Assert.Contains("结论：巡检失败：RTSP 未就绪", summary);
         Assert.Contains("前置归类：RTSP 未就绪", summary);
         Assert.Contains("失败分类：RTSP 响应解密失败", summary);
         Assert.True(client.PreviewUrlRequested);
@@ -217,7 +234,7 @@ public sealed class PreviewServiceTests
             }
         };
         var probe = new StubPlayProbe();
-        var service = new PreviewService(new InMemoryMapStore(), client, probe, NullLogger<PreviewService>.Instance);
+        var service = CreateService(client, probe: probe);
 
         var result = await service.InspectAsync("dev-001", CancellationToken.None);
 
@@ -254,7 +271,7 @@ public sealed class PreviewServiceTests
                 "播放建链失败",
                 "播放器未能完成播放建链。")
         };
-        var service = new PreviewService(new InMemoryMapStore(), client, probe, NullLogger<PreviewService>.Instance);
+        var service = CreateService(client, probe: probe);
 
         var result = await service.InspectAsync("dev-001", CancellationToken.None);
 
@@ -262,14 +279,14 @@ public sealed class PreviewServiceTests
         Assert.True(result.RtspReady);
         Assert.True(result.PlaybackStarted);
         Assert.False(result.EnteredPlaying);
-        Assert.Equal("巡检失败：播放建链失败", result.Conclusion);
+        Assert.Equal("巡检失败：播放失败", result.Conclusion);
         Assert.Equal("播放建链失败", result.FailureCategory);
         Assert.Equal("播放器未能完成播放建链。", result.DetailMessage);
         Assert.True(result.IsAbnormal);
         Assert.Equal(InspectAbnormalClass.PlayFailed, result.AbnormalClass);
         Assert.Equal("播放失败", result.AbnormalClassText);
         var summary = result.BuildDispositionSummary();
-        Assert.Contains("结论：巡检失败：播放建链失败", summary);
+        Assert.Contains("结论：巡检失败：播放失败", summary);
         Assert.Contains("前置归类：播放失败", summary);
         Assert.Contains("失败分类：播放建链失败", summary);
         Assert.True(probe.ProbeRequested);
@@ -301,7 +318,7 @@ public sealed class PreviewServiceTests
                 string.Empty,
                 "播放器已进入 Playing 播放态。")
         };
-        var service = new PreviewService(new InMemoryMapStore(), client, probe, NullLogger<PreviewService>.Instance);
+        var service = CreateService(client, probe: probe);
 
         var result = await service.InspectAsync("dev-001", CancellationToken.None);
 
@@ -334,7 +351,7 @@ public sealed class PreviewServiceTests
             true,
             true,
             false,
-            "巡检失败：播放建链失败",
+            "巡检失败：播放失败",
             "播放建链失败",
             "播放器输出原始地址 rtsp://demo/live/dev-001?token=abc 后建链失败。",
             InspectAbnormalClass.PlayFailed);
@@ -342,7 +359,20 @@ public sealed class PreviewServiceTests
         var summary = result.BuildDispositionSummary();
 
         Assert.DoesNotContain("rtsp://demo/live/dev-001?token=abc", summary);
-        Assert.Contains("RTSP 地址不展示地址明文", summary);
+        Assert.Contains("RTSP 地址不展示明文", summary);
+    }
+
+    private static PreviewService CreateService(
+        StubOpenPlatformClient? client = null,
+        StubGroupSyncStore? groupStore = null,
+        StubPlayProbe? probe = null)
+    {
+        return new PreviewService(
+            new InMemoryMapStore(),
+            groupStore ?? new StubGroupSyncStore(),
+            client ?? new StubOpenPlatformClient(),
+            probe ?? new StubPlayProbe(),
+            NullLogger<PreviewService>.Instance);
     }
 
     private sealed class StubOpenPlatformClient : IOpenPlatformClient
@@ -436,6 +466,44 @@ public sealed class PreviewServiceTests
         {
             ProbeRequested = true;
             return Task.FromResult(ProbeResult);
+        }
+    }
+
+    private sealed class StubGroupSyncStore : IGroupSyncStore
+    {
+        public Task ReplaceGroupsAsync(IReadOnlyCollection<InspectionGroup> groups, CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteOrphanDevicesAsync(CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task ReplaceDevicesForGroupAsync(string groupId, IReadOnlyCollection<InspectionDevice> devices, CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
+
+        public Task<OverviewStats> GetOverviewStatsAsync(CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new OverviewStats(1, 1, 0, 0, DateTimeOffset.Parse("2026-03-28T09:58:00+08:00")));
+        }
+
+        public Task<IReadOnlyList<InspectionGroup>> GetGroupsAsync(CancellationToken cancellationToken)
+        {
+            IReadOnlyList<InspectionGroup> payload =
+            [
+                new InspectionGroup("group-001", "默认分组", 1, DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"))
+            ];
+
+            return Task.FromResult(payload);
+        }
+
+        public Task<LocalSyncSnapshot> GetLocalSyncSnapshotAsync(CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new LocalSyncSnapshot(1, 1, DateTimeOffset.Parse("2026-03-28T09:58:00+08:00")));
         }
     }
 

@@ -30,9 +30,9 @@ public sealed partial class ShellWindowViewModel : ObservableObject
 
     public ThemeSettingsPageViewModel ThemeSettings { get; }
 
-    public string PhaseText => "Phase 0 / 单点预览最小链路";
+    public string PhaseText => "Phase 0 / 首版最小闭环收口";
 
-    public string ScopeText => "当前轮次聚焦单点视频预览最小链路：复用本地点位、先做状态诊断、再获取 RTSP 地址，不做 RTSP 实际播放。";
+    public string ScopeText => "当前轮次聚焦真实设备目录与所有点位可见、异常池单条复检和最小恢复确认；不扩工单、通知、批量巡检。";
 
     public async Task InitializeAsync()
     {
