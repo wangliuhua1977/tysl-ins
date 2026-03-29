@@ -160,6 +160,42 @@ public sealed class OpenPlatformClientTests
         Assert.Equal("1200", result.Payload.ExpireTime);
     }
 
+    [Fact]
+    public async Task GetGroupListAsync_ParsesAllGroups_WhenPayloadIsWrappedBySingleArrayObject()
+    {
+        using var client = CreateClient(
+            CreatePrivateKeyPem(),
+            CreateHandler(
+                CreateJsonResponse("""{"code":0,"msg":"成功","data":{"accessToken":"token","refreshToken":"refresh","expiresIn":3600}}"""),
+                CreateJsonResponse("""{"code":0,"msg":"成功","data":{"total":2,"records":[{"groupId":"g1","groupName":"组1","deviceCount":2},{"groupId":"g2","groupName":"组2","deviceCount":1}]}}""")));
+
+        var result = await client.GetGroupListAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Payload);
+        Assert.Equal(2, result.Payload!.Count);
+        Assert.Equal("g1", result.Payload[0].GroupId);
+        Assert.Equal("g2", result.Payload[1].GroupId);
+    }
+
+    [Fact]
+    public async Task GetGroupDeviceListAsync_ParsesAllDevices_WhenPayloadIsWrappedBySingleArrayObject()
+    {
+        using var client = CreateClient(
+            CreatePrivateKeyPem(),
+            CreateHandler(
+                CreateJsonResponse("""{"code":0,"msg":"成功","data":{"accessToken":"token","refreshToken":"refresh","expiresIn":3600}}"""),
+                CreateJsonResponse("""{"code":0,"msg":"成功","data":{"total":2,"items":[{"deviceCode":"d1","deviceName":"设备1","groupId":"","latitude":"31.23","longitude":"121.47","location":"上海","onlineStatus":1,"cloudStatus":1,"bandStatus":1,"sourceTypeFlag":0},{"deviceCode":"d2","deviceName":"设备2","groupId":"g1","latitude":"","longitude":"","location":"未定位","onlineStatus":0,"cloudStatus":1,"bandStatus":0,"sourceTypeFlag":0}]}}""")));
+
+        var result = await client.GetGroupDeviceListAsync("g1", CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.NotNull(result.Payload);
+        Assert.Equal(2, result.Payload!.Count);
+        Assert.Equal("g1", result.Payload[0].GroupId);
+        Assert.Equal("d2", result.Payload[1].DeviceCode);
+    }
+
     private static OpenPlatformClient CreateClient(string rsaPrivateKey, HttpMessageHandler handler)
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "tysl-ins-tests", Guid.NewGuid().ToString("N"));

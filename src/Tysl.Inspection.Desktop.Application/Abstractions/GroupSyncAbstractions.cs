@@ -11,6 +11,11 @@ public interface IGroupSyncStore
 {
     Task ReplaceGroupsAsync(IReadOnlyCollection<InspectionGroup> groups, CancellationToken cancellationToken);
 
+    Task ReplaceSnapshotAsync(
+        IReadOnlyCollection<InspectionGroup> groups,
+        IReadOnlyCollection<InspectionDevice> devices,
+        CancellationToken cancellationToken);
+
     Task DeleteOrphanDevicesAsync(CancellationToken cancellationToken);
 
     Task ReplaceDevicesForGroupAsync(
@@ -21,6 +26,8 @@ public interface IGroupSyncStore
     Task<OverviewStats> GetOverviewStatsAsync(CancellationToken cancellationToken);
 
     Task<IReadOnlyList<InspectionGroup>> GetGroupsAsync(CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<InspectionDevice>> GetDevicesAsync(CancellationToken cancellationToken);
 
     Task<LocalSyncSnapshot> GetLocalSyncSnapshotAsync(CancellationToken cancellationToken);
 }
@@ -118,9 +125,24 @@ public sealed record PreviewDirectoryDeviceItem(
 public sealed record PreviewDirectoryGroupItem(
     string GroupId,
     string GroupName,
+    int ReportedDeviceCount,
     IReadOnlyList<PreviewDirectoryDeviceItem> Devices)
 {
-    public string DisplayText => $"{GroupName} ({Devices.Count})";
+    public int LoadedDeviceCount => Devices.Count;
+
+    public bool CountMatches => ReportedDeviceCount == LoadedDeviceCount;
+
+    public string DisplayText => CountMatches
+        ? $"{GroupName} ({LoadedDeviceCount})"
+        : $"{GroupName} (本地 {LoadedDeviceCount} / 平台 {ReportedDeviceCount})";
+
+    public string DeviceCountSummaryText => CountMatches
+        ? $"当前分组共 {LoadedDeviceCount} 台设备。"
+        : $"当前分组本地已落地 {LoadedDeviceCount} 台设备，平台分组返回设备数 {ReportedDeviceCount} 台。";
+
+    public string EmptyStateText => LoadedDeviceCount == 0
+        ? "当前分组暂无设备，已按空目录保留，便于人工核对是否完整。"
+        : string.Empty;
 }
 
 public sealed record PreviewDeviceLoadResult(
@@ -128,6 +150,9 @@ public sealed record PreviewDeviceLoadResult(
     string Message,
     IReadOnlyList<PreviewDeviceOption> Devices,
     IReadOnlyList<PreviewDirectoryGroupItem> DirectoryGroups,
+    int SnapshotGroupCount,
+    int SnapshotDeviceCount,
+    int ReportedDeviceCount,
     DateTimeOffset? LastSyncedAt);
 
 public sealed record PreviewPrepareResult(

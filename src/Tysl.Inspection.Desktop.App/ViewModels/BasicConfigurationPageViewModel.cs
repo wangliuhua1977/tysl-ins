@@ -88,7 +88,7 @@ public sealed partial class BasicConfigurationPageViewModel(
         LastSyncedAtText = summary.LastSyncedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "尚无同步记录";
         StatusText = summary.IsSuccess
             ? "同步完成，分组和设备已写入本地 SQLite。"
-            : "同步完成，但存在失败项，请查看失败明细与日志。";
+            : "同步完成，但存在失败项；为避免局部落地，本地 SQLite 仍保留上一版完整快照，请查看失败明细与日志。";
         FailureDetails = string.Join(
             Environment.NewLine,
             summary.Failures.Select(failure =>

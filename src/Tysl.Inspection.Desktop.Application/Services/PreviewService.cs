@@ -6,7 +6,6 @@ using Tysl.Inspection.Desktop.Domain.Models;
 namespace Tysl.Inspection.Desktop.Application.Services;
 
 public sealed class PreviewService(
-    IMapStore mapStore,
     IGroupSyncStore groupSyncStore,
     IOpenPlatformClient openPlatformClient,
     IPlayProbe playProbe,
@@ -17,8 +16,9 @@ public sealed class PreviewService(
         try
         {
             var groups = await groupSyncStore.GetGroupsAsync(cancellationToken);
-            var devices = await mapStore.GetDevicesAsync(cancellationToken);
+            var devices = await groupSyncStore.GetDevicesAsync(cancellationToken);
             var snapshot = await groupSyncStore.GetLocalSyncSnapshotAsync(cancellationToken);
+            var devicesByGroup = devices.ToLookup(device => device.GroupId, StringComparer.OrdinalIgnoreCase);
 
             var payload = devices
                 .OrderBy(device => device.DeviceName, StringComparer.OrdinalIgnoreCase)
@@ -32,21 +32,57 @@ public sealed class PreviewService(
                 .Select(group => new PreviewDirectoryGroupItem(
                     group.GroupId,
                     group.GroupName,
-                    devices
-                        .Where(device => string.Equals(device.GroupId, group.GroupId, StringComparison.OrdinalIgnoreCase))
+                    group.DeviceCount,
+                    devicesByGroup[group.GroupId]
                         .OrderBy(device => device.DeviceName, StringComparer.OrdinalIgnoreCase)
                         .ThenBy(device => device.DeviceCode, StringComparer.OrdinalIgnoreCase)
                         .Select(device => new PreviewDirectoryDeviceItem(device.DeviceCode, device.DeviceName, device.OnlineStatus))
                         .ToArray()))
                 .ToArray();
 
+            var reportedDeviceCount = groups.Sum(group => Math.Max(group.DeviceCount, 0));
+            var emptyGroupCount = directoryGroups.Count(group => group.LoadedDeviceCount == 0);
+            var mismatchedGroups = directoryGroups
+                .Where(group => !group.CountMatches)
+                .Select(group => $"{group.GroupName}({group.GroupId}) 本地{group.LoadedDeviceCount}/平台{group.ReportedDeviceCount}")
+                .ToArray();
+
             logger.LogInformation(
-                "Loaded real device directory for preview page. Groups={GroupCount}, Devices={DeviceCount}, LastSyncedAt={LastSyncedAt}.",
+                "Loaded full real device directory for preview page. SnapshotGroups={SnapshotGroupCount}, SnapshotDevices={SnapshotDeviceCount}, BoundGroups={BoundGroupCount}, BoundDevices={BoundDeviceCount}, ReportedDevices={ReportedDeviceCount}, EmptyGroups={EmptyGroupCount}, LastSyncedAt={LastSyncedAt}.",
+                snapshot.GroupCount,
+                snapshot.DeviceCount,
                 directoryGroups.Length,
                 payload.Length,
+                reportedDeviceCount,
+                emptyGroupCount,
                 snapshot.LastSyncedAt?.ToString("O") ?? "null");
 
-            return new PreviewDeviceLoadResult(true, string.Empty, payload, directoryGroups, snapshot.LastSyncedAt);
+            if (snapshot.GroupCount != directoryGroups.Length || snapshot.DeviceCount != payload.Length)
+            {
+                logger.LogWarning(
+                    "Preview directory binding count mismatch. SnapshotGroups={SnapshotGroupCount}, BoundGroups={BoundGroupCount}, SnapshotDevices={SnapshotDeviceCount}, BoundDevices={BoundDeviceCount}.",
+                    snapshot.GroupCount,
+                    directoryGroups.Length,
+                    snapshot.DeviceCount,
+                    payload.Length);
+            }
+
+            if (mismatchedGroups.Length > 0)
+            {
+                logger.LogWarning(
+                    "Preview directory group count mismatch detected. Groups={Groups}.",
+                    string.Join(" | ", mismatchedGroups));
+            }
+
+            return new PreviewDeviceLoadResult(
+                true,
+                string.Empty,
+                payload,
+                directoryGroups,
+                snapshot.GroupCount,
+                snapshot.DeviceCount,
+                reportedDeviceCount,
+                snapshot.LastSyncedAt);
         }
         catch (Exception exception)
         {
@@ -56,6 +92,9 @@ public sealed class PreviewService(
                 BuildSqliteMessage(exception),
                 Array.Empty<PreviewDeviceOption>(),
                 Array.Empty<PreviewDirectoryGroupItem>(),
+                0,
+                0,
+                0,
                 null);
         }
     }
@@ -286,7 +325,7 @@ public sealed class PreviewService(
         DateTimeOffset requestedAt,
         CancellationToken cancellationToken)
     {
-        var devices = await mapStore.GetDevicesAsync(cancellationToken);
+        var devices = await groupSyncStore.GetDevicesAsync(cancellationToken);
         var device = devices.FirstOrDefault(item => string.Equals(item.DeviceCode, deviceCode, StringComparison.OrdinalIgnoreCase));
         if (device is null)
         {

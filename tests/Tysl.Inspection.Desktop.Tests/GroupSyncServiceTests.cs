@@ -31,7 +31,7 @@ public sealed class GroupSyncServiceTests
     }
 
     [Fact]
-    public async Task SyncAsync_TracksGroupDeviceFailures_WithoutDiscardingSuccessfulGroups()
+    public async Task SyncAsync_KeepsPreviousSnapshot_WhenAnyGroupDeviceListFails()
     {
         var client = new StubOpenPlatformClient
         {
@@ -62,15 +62,70 @@ public sealed class GroupSyncServiceTests
             }
         };
         var store = new InMemoryGroupSyncStore();
+        await store.ReplaceSnapshotAsync(
+            [new InspectionGroup("seed-group", "旧分组", 1, DateTimeOffset.Parse("2026-03-28T09:00:00+08:00"))],
+            [new InspectionDevice("seed-device", "旧设备", "seed-group", null, null, null, 1, 1, 1, 0, DateTimeOffset.Parse("2026-03-28T09:00:00+08:00"))],
+            CancellationToken.None);
         var service = new GroupSyncService(client, store, NullLogger<GroupSyncService>.Instance);
 
         var summary = await service.SyncAsync(CancellationToken.None);
 
-        Assert.Equal(2, summary.GroupCount);
+        Assert.Equal(1, summary.GroupCount);
         Assert.Equal(1, summary.DeviceCount);
         Assert.Equal(1, summary.SuccessCount);
         Assert.Equal(1, summary.FailureCount);
         Assert.Equal(GroupSyncFailureKind.GetGroupDeviceListFailed, summary.Failures[0].FailureKind);
+    }
+
+    [Fact]
+    public async Task SyncAsync_ReplacesWholeSnapshot_WhenAllGroupsAndDevicesAreFetched()
+    {
+        var client = new StubOpenPlatformClient
+        {
+            GroupListResult = new OpenPlatformCallResult<IReadOnlyList<OpenPlatformGroupDto>>
+            {
+                Success = true,
+                EndpointName = "getGroupList",
+                Payload =
+                [
+                    new OpenPlatformGroupDto("g1", "组1", 2),
+                    new OpenPlatformGroupDto("g2", "组2", 1)
+                ]
+            },
+            GroupDeviceResults =
+            {
+                ["g1"] = new OpenPlatformCallResult<IReadOnlyList<OpenPlatformDeviceDto>>
+                {
+                    Success = true,
+                    EndpointName = "getGroupDeviceList",
+                    Payload =
+                    [
+                        new OpenPlatformDeviceDto("d1", "设备1", "g1", "31.23", "121.47", "上海", 1, 1, 1, 0),
+                        new OpenPlatformDeviceDto("d2", "设备2", "g1", null, null, "未定位", 0, 1, 0, 0)
+                    ]
+                },
+                ["g2"] = new OpenPlatformCallResult<IReadOnlyList<OpenPlatformDeviceDto>>
+                {
+                    Success = true,
+                    EndpointName = "getGroupDeviceList",
+                    Payload = [new OpenPlatformDeviceDto("d3", "设备3", "g2", "39.90", "116.40", "北京", 1, 1, 1, 0)]
+                }
+            }
+        };
+        var store = new InMemoryGroupSyncStore();
+        var service = new GroupSyncService(client, store, NullLogger<GroupSyncService>.Instance);
+
+        var summary = await service.SyncAsync(CancellationToken.None);
+        var groups = await store.GetGroupsAsync(CancellationToken.None);
+        var devices = await store.GetDevicesAsync(CancellationToken.None);
+
+        Assert.Equal(2, summary.GroupCount);
+        Assert.Equal(3, summary.DeviceCount);
+        Assert.Equal(2, summary.SuccessCount);
+        Assert.Equal(0, summary.FailureCount);
+        Assert.Equal(2, groups.Count);
+        Assert.Equal(3, devices.Count);
+        Assert.Contains(devices, device => device.DeviceCode == "d2");
     }
 
     private sealed class StubOpenPlatformClient : IOpenPlatformClient
@@ -147,6 +202,25 @@ public sealed class GroupSyncServiceTests
             return Task.CompletedTask;
         }
 
+        public Task ReplaceSnapshotAsync(
+            IReadOnlyCollection<InspectionGroup> groups,
+            IReadOnlyCollection<InspectionDevice> devices,
+            CancellationToken cancellationToken)
+        {
+            this.groups.Clear();
+            this.groups.AddRange(groups);
+            devicesByGroup.Clear();
+
+            foreach (var group in groups)
+            {
+                devicesByGroup[group.GroupId] = devices
+                    .Where(device => string.Equals(device.GroupId, group.GroupId, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+            }
+
+            return Task.CompletedTask;
+        }
+
         public Task DeleteOrphanDevicesAsync(CancellationToken cancellationToken)
         {
             var validGroups = groups.Select(group => group.GroupId).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -183,6 +257,11 @@ public sealed class GroupSyncServiceTests
         public Task<IReadOnlyList<InspectionGroup>> GetGroupsAsync(CancellationToken cancellationToken)
         {
             return Task.FromResult<IReadOnlyList<InspectionGroup>>(groups.ToArray());
+        }
+
+        public Task<IReadOnlyList<InspectionDevice>> GetDevicesAsync(CancellationToken cancellationToken)
+        {
+            return Task.FromResult<IReadOnlyList<InspectionDevice>>(devicesByGroup.Values.SelectMany(list => list).ToArray());
         }
 
         public Task<LocalSyncSnapshot> GetLocalSyncSnapshotAsync(CancellationToken cancellationToken)

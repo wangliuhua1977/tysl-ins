@@ -22,7 +22,7 @@
                 <TextBlock Margin="0,8,0,0"
                            Foreground="#F3F4F6"
                            TextWrapping="Wrap"
-                           Text="继续复用现有单点巡检链路，在同一页内完成真实分组目录查看、单点预览、异常池复检和最小恢复确认。" />
+                           Text="继续复用现有单点巡检链路，并在同一页内明确展示本地 SQLite 已落地的全部目录、设备总数和分组明细，便于人工核对是否完整。" />
                 <TextBlock Margin="0,8,0,0"
                            Foreground="#DDE7F2"
                            TextWrapping="Wrap"
@@ -57,13 +57,103 @@
                                TextWrapping="Wrap"
                                Text="{Binding DirectoryStatusText}" />
 
+                    <Grid Margin="0,16,0,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="12" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <Border Grid.Row="0"
+                                Grid.Column="0"
+                                Padding="12"
+                                Background="{DynamicResource WindowBackgroundBrush}"
+                                BorderBrush="{DynamicResource CardBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="14">
+                            <StackPanel>
+                                <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="目录总数" />
+                                <TextBlock Margin="0,6,0,0"
+                                           FontSize="22"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource PrimaryTextBrush}"
+                                           Text="{Binding DirectoryGroupCount}" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Row="0"
+                                Grid.Column="2"
+                                Padding="12"
+                                Background="{DynamicResource WindowBackgroundBrush}"
+                                BorderBrush="{DynamicResource CardBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="14">
+                            <StackPanel>
+                                <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="设备总数" />
+                                <TextBlock Margin="0,6,0,0"
+                                           FontSize="22"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource PrimaryTextBrush}"
+                                           Text="{Binding DirectoryDeviceCount}" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Row="1"
+                                Grid.Column="0"
+                                Margin="0,12,0,0"
+                                Padding="12"
+                                Background="{DynamicResource WindowBackgroundBrush}"
+                                BorderBrush="{DynamicResource CardBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="14">
+                            <StackPanel>
+                                <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="SQLite 快照" />
+                                <TextBlock Margin="0,6,0,0"
+                                           Foreground="{DynamicResource PrimaryTextBrush}"
+                                           TextWrapping="Wrap">
+                                    <Run Text="目录 " />
+                                    <Run Text="{Binding DirectorySnapshotGroupCount}" />
+                                    <Run Text=" / 设备 " />
+                                    <Run Text="{Binding DirectorySnapshotDeviceCount}" />
+                                </TextBlock>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Row="1"
+                                Grid.Column="2"
+                                Margin="0,12,0,0"
+                                Padding="12"
+                                Background="{DynamicResource WindowBackgroundBrush}"
+                                BorderBrush="{DynamicResource CardBorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="14">
+                            <StackPanel>
+                                <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="平台分组汇总" />
+                                <TextBlock Margin="0,6,0,0"
+                                           FontSize="22"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource PrimaryTextBrush}"
+                                           Text="{Binding DirectoryReportedDeviceCount}" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <TextBlock Margin="0,12,0,0"
+                               Foreground="{DynamicResource SecondaryTextBrush}"
+                               TextWrapping="Wrap"
+                               Text="{Binding DirectoryVerificationText}" />
+
                     <Border Margin="0,16,0,0"
                             Padding="12"
                             Background="{DynamicResource WindowBackgroundBrush}"
                             BorderBrush="{DynamicResource CardBorderBrush}"
                             BorderThickness="1"
                             CornerRadius="16">
-                        <ScrollViewer MaxHeight="260"
+                        <ScrollViewer MaxHeight="340"
                                       VerticalScrollBarVisibility="Auto">
                             <ItemsControl ItemsSource="{Binding DirectoryGroups}">
                                 <ItemsControl.ItemTemplate>
@@ -74,10 +164,19 @@
                                                   Background="{DynamicResource CardBrush}"
                                                   Foreground="{DynamicResource PrimaryTextBrush}">
                                             <Expander.Header>
-                                                <TextBlock FontWeight="SemiBold"
-                                                           Text="{Binding DisplayText}" />
+                                                <StackPanel>
+                                                    <TextBlock FontWeight="SemiBold"
+                                                               Text="{Binding DisplayText}" />
+                                                    <TextBlock Margin="0,4,0,0"
+                                                               Foreground="{DynamicResource SecondaryTextBrush}"
+                                                               Text="{Binding DeviceCountSummaryText}" />
+                                                </StackPanel>
                                             </Expander.Header>
-                                            <ItemsControl ItemsSource="{Binding Devices}">
+                                            <StackPanel>
+                                                <TextBlock Foreground="{DynamicResource SecondaryTextBrush}"
+                                                           TextWrapping="Wrap"
+                                                           Text="{Binding EmptyStateText}" />
+                                                <ItemsControl ItemsSource="{Binding Devices}">
                                                 <ItemsControl.ItemTemplate>
                                                     <DataTemplate>
                                                         <Border Margin="0,8,0,0"
@@ -109,11 +208,12 @@
                                                                         Command="{Binding DataContext.SelectDirectoryDeviceCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                                         CommandParameter="{Binding}"
                                                                         Content="选中" />
-                                                            </Grid>
-                                                        </Border>
-                                                    </DataTemplate>
-                                                </ItemsControl.ItemTemplate>
-                                            </ItemsControl>
+                                                                </Grid>
+                                                            </Border>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </StackPanel>
                                         </Expander>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>

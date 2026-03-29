@@ -24,7 +24,42 @@ public sealed class PreviewPageViewModelTests
         var device = Assert.Single(group.Devices);
         Assert.Equal("测试设备", device.DeviceName);
         Assert.Equal("在线", device.OnlineStatusText);
-        Assert.Contains("已加载 1 个分组、1 个点位", viewModel.DirectoryStatusText);
+        Assert.Equal(1, viewModel.DirectoryGroupCount);
+        Assert.Equal(1, viewModel.DirectoryDeviceCount);
+        Assert.True(viewModel.DirectoryCountsMatch);
+        Assert.Contains("当前目录绑定与本地 SQLite 快照一致", viewModel.DirectoryVerificationText);
+        Assert.Contains("当前展示的是本地 SQLite 已落地的全部目录与全部设备", viewModel.DirectoryStatusText);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_ShowsMismatchHint_WhenDirectoryBindingDoesNotMatchSnapshot()
+    {
+        var previewService = new StubPreviewService
+        {
+            LoadResult = new PreviewDeviceLoadResult(
+                true,
+                string.Empty,
+                [new PreviewDeviceOption("dev-001", "测试设备", 1)],
+                [new PreviewDirectoryGroupItem(
+                    "group-001",
+                    "默认分组",
+                    2,
+                    [new PreviewDirectoryDeviceItem("dev-001", "测试设备", 1)])],
+                2,
+                3,
+                3,
+                DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"))
+        };
+        var viewModel = new PreviewPageViewModel(
+            previewService,
+            CreateStore(),
+            new StubPlayWinSvc(),
+            NullLogger<PreviewPageViewModel>.Instance);
+
+        await viewModel.InitializeAsync();
+
+        Assert.False(viewModel.DirectoryCountsMatch);
+        Assert.Contains("当前目录绑定与本地 SQLite 快照不一致", viewModel.DirectoryVerificationText);
     }
 
     [Fact]
@@ -405,7 +440,11 @@ public sealed class PreviewPageViewModelTests
             [new PreviewDirectoryGroupItem(
                 "group-001",
                 "默认分组",
+                1,
                 [new PreviewDirectoryDeviceItem("dev-001", "测试设备", 1)])],
+            1,
+            1,
+            1,
             DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"));
 
         public PreviewPrepareResult PrepareResult { get; set; } = new(

@@ -82,7 +82,7 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
             endpointName: "getGroupList",
             path: "/open/token/vcpGroup/getGroupList",
             privateParameters: requestParameters,
-            parsePayload: root => (IReadOnlyList<OpenPlatformGroupDto>)(JsonSerializer.Deserialize<List<OpenPlatformGroupDto>>(root.GetRawText(), JsonSerializerOptions) ?? []),
+            parsePayload: ParseGroupList,
             cancellationToken: cancellationToken);
     }
 
@@ -110,13 +110,7 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
             endpointName: "getGroupDeviceList",
             path: "/open/token/vcpGroup/getGroupDeviceList",
             privateParameters: requestParameters,
-            parsePayload: root =>
-            {
-                var devices = JsonSerializer.Deserialize<List<OpenPlatformDeviceDto>>(root.GetRawText(), JsonSerializerOptions) ?? [];
-                return (IReadOnlyList<OpenPlatformDeviceDto>)devices
-                    .Select(device => device with { GroupId = string.IsNullOrWhiteSpace(device.GroupId) ? groupId : device.GroupId })
-                    .ToArray();
-            },
+            parsePayload: root => ParseGroupDeviceList(root, groupId),
             cancellationToken: cancellationToken);
     }
 
@@ -752,6 +746,21 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
         return new OpenPlatformDeviceStatusPayload(deviceCode, onlineStatus);
     }
 
+    private static IReadOnlyList<OpenPlatformGroupDto> ParseGroupList(JsonElement root)
+    {
+        var arrayElement = ExtractSingleArrayPayload(root, "getGroupList");
+        return JsonSerializer.Deserialize<List<OpenPlatformGroupDto>>(arrayElement.GetRawText(), JsonSerializerOptions) ?? [];
+    }
+
+    private static IReadOnlyList<OpenPlatformDeviceDto> ParseGroupDeviceList(JsonElement root, string groupId)
+    {
+        var arrayElement = ExtractSingleArrayPayload(root, "getGroupDeviceList");
+        var devices = JsonSerializer.Deserialize<List<OpenPlatformDeviceDto>>(arrayElement.GetRawText(), JsonSerializerOptions) ?? [];
+        return devices
+            .Select(device => device with { GroupId = string.IsNullOrWhiteSpace(device.GroupId) ? groupId : device.GroupId })
+            .ToArray();
+    }
+
     private static OpenPlatformPreviewUrlPayload ParsePreviewUrl(JsonElement root)
     {
         if (root.ValueKind != JsonValueKind.Object)
@@ -771,6 +780,42 @@ public sealed class OpenPlatformClient : IOpenPlatformClient, IDisposable
 
         var expireTime = GetString(root, "expireTime");
         return new OpenPlatformPreviewUrlPayload(url, expireTime);
+    }
+
+    private static JsonElement ExtractSingleArrayPayload(JsonElement root, string endpointName)
+    {
+        if (root.ValueKind == JsonValueKind.Array)
+        {
+            return root.Clone();
+        }
+
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException($"{endpointName} 返回结构不是数组，也不是包含数组的对象；文档未说明，需人工确认。");
+        }
+
+        JsonElement? arrayElement = null;
+        foreach (var property in root.EnumerateObject())
+        {
+            if (property.Value.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            if (arrayElement is not null)
+            {
+                throw new InvalidOperationException($"{endpointName} 返回结构包含多个数组字段；文档未说明，需人工确认。");
+            }
+
+            arrayElement = property.Value.Clone();
+        }
+
+        if (arrayElement is null)
+        {
+            throw new InvalidOperationException($"{endpointName} 返回结构中未找到数组字段；文档未说明，需人工确认。");
+        }
+
+        return arrayElement.Value;
     }
 
     private static JsonElement UnwrapPayload(JsonElement root, string? requestedDeviceCode)

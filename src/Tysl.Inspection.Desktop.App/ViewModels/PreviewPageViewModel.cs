@@ -28,6 +28,21 @@ public sealed partial class PreviewPageViewModel(
     private string directoryStatusText = "正在加载真实设备目录...";
 
     [ObservableProperty]
+    private int directoryGroupCount;
+
+    [ObservableProperty]
+    private int directoryDeviceCount;
+
+    [ObservableProperty]
+    private int directorySnapshotGroupCount;
+
+    [ObservableProperty]
+    private int directorySnapshotDeviceCount;
+
+    [ObservableProperty]
+    private int directoryReportedDeviceCount;
+
+    [ObservableProperty]
     private bool isBusy;
 
     [ObservableProperty]
@@ -85,6 +100,25 @@ public sealed partial class PreviewPageViewModel(
         ? $"当前异常池共 {AbnormalItems.Count} 条；“已复核”“处置状态”“已恢复确认”相互独立，恢复确认仅在复检通过后标记。"
         : "当前异常池暂无异常项；复检通过会在原记录上标记“已恢复确认”。";
 
+    public bool DirectoryCountsMatch =>
+        DirectoryGroupCount == DirectorySnapshotGroupCount
+        && DirectoryDeviceCount == DirectorySnapshotDeviceCount;
+
+    public string DirectoryVerificationText
+    {
+        get
+        {
+            if (DirectorySnapshotGroupCount == 0 && DirectorySnapshotDeviceCount == 0)
+            {
+                return "当前本地 SQLite 中暂无目录快照，请先执行一次全量同步。";
+            }
+
+            return DirectoryCountsMatch
+                ? $"当前目录绑定与本地 SQLite 快照一致；平台分组返回设备数汇总 {DirectoryReportedDeviceCount} 台。"
+                : $"当前目录绑定与本地 SQLite 快照不一致：目录 {DirectoryGroupCount}/{DirectorySnapshotGroupCount}，设备 {DirectoryDeviceCount}/{DirectorySnapshotDeviceCount}。";
+        }
+    }
+
     public async Task InitializeAsync()
     {
         if (hasLoaded)
@@ -118,6 +152,8 @@ public sealed partial class PreviewPageViewModel(
             DirectoryGroups.Add(group);
         }
 
+        ApplyDirectorySummary(result);
+
         if (!result.Success)
         {
             PageStatusText = result.Message;
@@ -129,7 +165,13 @@ public sealed partial class PreviewPageViewModel(
         }
 
         DirectoryStatusText = DirectoryGroups.Count > 0
-            ? BuildDirectoryStatusText(DirectoryGroups.Count, Devices.Count, result.LastSyncedAt)
+            ? BuildDirectoryStatusText(
+                DirectoryGroups.Count,
+                Devices.Count,
+                result.SnapshotGroupCount,
+                result.SnapshotDeviceCount,
+                result.ReportedDeviceCount,
+                result.LastSyncedAt)
             : "本地 SQLite 中暂无真实目录数据，请先完成同步。";
 
         PageStatusText = Devices.Count > 0
@@ -141,6 +183,16 @@ public sealed partial class PreviewPageViewModel(
             DirectoryGroups.Count,
             Devices.Count,
             result.LastSyncedAt?.ToString("O") ?? "null");
+
+        if (!DirectoryCountsMatch)
+        {
+            logger.LogWarning(
+                "Preview page directory binding mismatch. BoundGroups={BoundGroupCount}, SnapshotGroups={SnapshotGroupCount}, BoundDevices={BoundDeviceCount}, SnapshotDevices={SnapshotDeviceCount}.",
+                DirectoryGroupCount,
+                DirectorySnapshotGroupCount,
+                DirectoryDeviceCount,
+                DirectorySnapshotDeviceCount);
+        }
 
         SelectedDevice = Devices.FirstOrDefault(device => string.Equals(device.DeviceCode, currentCode, StringComparison.OrdinalIgnoreCase))
             ?? Devices.FirstOrDefault();
@@ -511,13 +563,33 @@ public sealed partial class PreviewPageViewModel(
         SelectedDevice = Devices.FirstOrDefault(device => string.Equals(device.DeviceCode, deviceCode, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static string BuildDirectoryStatusText(int groupCount, int deviceCount, DateTimeOffset? lastSyncedAt)
+    private void ApplyDirectorySummary(PreviewDeviceLoadResult result)
     {
+        DirectoryGroupCount = result.DirectoryGroups.Count;
+        DirectoryDeviceCount = result.Devices.Count;
+        DirectorySnapshotGroupCount = result.SnapshotGroupCount;
+        DirectorySnapshotDeviceCount = result.SnapshotDeviceCount;
+        DirectoryReportedDeviceCount = result.ReportedDeviceCount;
+        OnPropertyChanged(nameof(DirectoryCountsMatch));
+        OnPropertyChanged(nameof(DirectoryVerificationText));
+    }
+
+    private static string BuildDirectoryStatusText(
+        int groupCount,
+        int deviceCount,
+        int snapshotGroupCount,
+        int snapshotDeviceCount,
+        int reportedDeviceCount,
+        DateTimeOffset? lastSyncedAt)
+    {
+        var summary = $"当前展示的是本地 SQLite 已落地的全部目录与全部设备：目录 {groupCount}/{snapshotGroupCount}，设备 {deviceCount}/{snapshotDeviceCount}";
+        summary += $"；平台分组返回设备数汇总 {reportedDeviceCount}";
+
         if (lastSyncedAt is null)
         {
-            return $"已加载 {groupCount} 个分组、{deviceCount} 个点位。";
+            return $"{summary}。";
         }
 
-        return $"已加载 {groupCount} 个分组、{deviceCount} 个点位；最近同步 {lastSyncedAt:yyyy-MM-dd HH:mm:ss}。";
+        return $"{summary}；最近同步 {lastSyncedAt:yyyy-MM-dd HH:mm:ss}。";
     }
 }

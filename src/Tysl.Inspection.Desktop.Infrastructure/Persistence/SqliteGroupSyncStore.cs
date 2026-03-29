@@ -63,6 +63,112 @@ public sealed class SqliteGroupSyncStore(
         await transaction.CommitAsync(cancellationToken);
     }
 
+    public async Task ReplaceSnapshotAsync(
+        IReadOnlyCollection<InspectionGroup> groups,
+        IReadOnlyCollection<InspectionDevice> devices,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+
+        await using (var deleteDevices = connection.CreateCommand())
+        {
+            deleteDevices.Transaction = transaction;
+            deleteDevices.CommandText = "DELETE FROM Device;";
+            await deleteDevices.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var deleteMissingGroups = connection.CreateCommand())
+        {
+            deleteMissingGroups.Transaction = transaction;
+            if (groups.Count == 0)
+            {
+                deleteMissingGroups.CommandText = """DELETE FROM "Group";""";
+            }
+            else
+            {
+                var placeholders = new List<string>();
+                var index = 0;
+                foreach (var group in groups)
+                {
+                    var parameterName = $"@groupId{index++}";
+                    placeholders.Add(parameterName);
+                    deleteMissingGroups.Parameters.AddWithValue(parameterName, group.GroupId);
+                }
+
+                deleteMissingGroups.CommandText = $"""DELETE FROM "Group" WHERE groupId NOT IN ({string.Join(",", placeholders)});""";
+            }
+
+            await deleteMissingGroups.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        foreach (var group in groups)
+        {
+            await using var upsertGroup = connection.CreateCommand();
+            upsertGroup.Transaction = transaction;
+            upsertGroup.CommandText = """
+                INSERT INTO "Group"(groupId, groupName, deviceCount, syncedAt)
+                VALUES(@groupId, @groupName, @deviceCount, @syncedAt)
+                ON CONFLICT(groupId) DO UPDATE SET
+                    groupName = excluded.groupName,
+                    deviceCount = excluded.deviceCount,
+                    syncedAt = excluded.syncedAt;
+                """;
+            upsertGroup.Parameters.AddWithValue("@groupId", group.GroupId);
+            upsertGroup.Parameters.AddWithValue("@groupName", group.GroupName);
+            upsertGroup.Parameters.AddWithValue("@deviceCount", group.DeviceCount);
+            upsertGroup.Parameters.AddWithValue("@syncedAt", group.SyncedAt.ToString("O", CultureInfo.InvariantCulture));
+            await upsertGroup.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        foreach (var device in devices)
+        {
+            await using var insertDevice = connection.CreateCommand();
+            insertDevice.Transaction = transaction;
+            insertDevice.CommandText = """
+                INSERT INTO Device(
+                    deviceCode,
+                    deviceName,
+                    groupId,
+                    latitude,
+                    longitude,
+                    location,
+                    onlineStatus,
+                    cloudStatus,
+                    bandStatus,
+                    sourceTypeFlag,
+                    syncedAt)
+                VALUES(
+                    @deviceCode,
+                    @deviceName,
+                    @groupId,
+                    @latitude,
+                    @longitude,
+                    @location,
+                    @onlineStatus,
+                    @cloudStatus,
+                    @bandStatus,
+                    @sourceTypeFlag,
+                    @syncedAt);
+                """;
+            insertDevice.Parameters.AddWithValue("@deviceCode", device.DeviceCode);
+            insertDevice.Parameters.AddWithValue("@deviceName", device.DeviceName);
+            insertDevice.Parameters.AddWithValue("@groupId", device.GroupId);
+            insertDevice.Parameters.AddWithValue("@latitude", (object?)device.Latitude ?? DBNull.Value);
+            insertDevice.Parameters.AddWithValue("@longitude", (object?)device.Longitude ?? DBNull.Value);
+            insertDevice.Parameters.AddWithValue("@location", (object?)device.Location ?? DBNull.Value);
+            insertDevice.Parameters.AddWithValue("@onlineStatus", (object?)device.OnlineStatus ?? DBNull.Value);
+            insertDevice.Parameters.AddWithValue("@cloudStatus", (object?)device.CloudStatus ?? DBNull.Value);
+            insertDevice.Parameters.AddWithValue("@bandStatus", (object?)device.BandStatus ?? DBNull.Value);
+            insertDevice.Parameters.AddWithValue("@sourceTypeFlag", (object?)device.SourceTypeFlag ?? DBNull.Value);
+            insertDevice.Parameters.AddWithValue("@syncedAt", device.SyncedAt.ToString("O", CultureInfo.InvariantCulture));
+            await insertDevice.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
     public async Task DeleteOrphanDevicesAsync(CancellationToken cancellationToken)
     {
         await using var connection = CreateConnection();
@@ -191,6 +297,50 @@ public sealed class SqliteGroupSyncStore(
         return groups;
     }
 
+    public async Task<IReadOnlyList<InspectionDevice>> GetDevicesAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+                deviceCode,
+                deviceName,
+                groupId,
+                latitude,
+                longitude,
+                location,
+                onlineStatus,
+                cloudStatus,
+                bandStatus,
+                sourceTypeFlag,
+                syncedAt
+            FROM Device
+            ORDER BY deviceName COLLATE NOCASE, deviceCode;
+            """;
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var devices = new List<InspectionDevice>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            devices.Add(new InspectionDevice(
+                ReadString(reader, 0),
+                ReadString(reader, 1),
+                ReadString(reader, 2),
+                ReadNullableString(reader, 3),
+                ReadNullableString(reader, 4),
+                ReadNullableString(reader, 5),
+                ReadNullableInt32(reader, 6),
+                ReadNullableInt32(reader, 7),
+                ReadNullableInt32(reader, 8),
+                ReadNullableInt32(reader, 9),
+                ReadSyncedAt(reader, 10)));
+        }
+
+        return devices;
+    }
+
     public async Task<LocalSyncSnapshot> GetLocalSyncSnapshotAsync(CancellationToken cancellationToken)
     {
         await using var connection = CreateConnection();
@@ -246,6 +396,11 @@ public sealed class SqliteGroupSyncStore(
         return reader.IsDBNull(ordinal) ? string.Empty : reader.GetString(ordinal);
     }
 
+    private static string? ReadNullableString(SqliteDataReader reader, int ordinal)
+    {
+        return reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
+    }
+
     private static int ReadInt32(SqliteDataReader reader, int ordinal)
     {
         if (reader.IsDBNull(ordinal))
@@ -260,6 +415,23 @@ public sealed class SqliteGroupSyncStore(
             int intValue => intValue,
             _ when int.TryParse(value.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) => parsed,
             _ => 0
+        };
+    }
+
+    private static int? ReadNullableInt32(SqliteDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal))
+        {
+            return null;
+        }
+
+        var value = reader.GetValue(ordinal);
+        return value switch
+        {
+            long longValue => Convert.ToInt32(longValue, CultureInfo.InvariantCulture),
+            int intValue => intValue,
+            _ when int.TryParse(value.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) => parsed,
+            _ => null
         };
     }
 
