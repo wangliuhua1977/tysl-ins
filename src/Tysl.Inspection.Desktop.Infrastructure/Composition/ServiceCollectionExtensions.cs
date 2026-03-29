@@ -24,6 +24,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ISqliteBootstrapper, SqliteBootstrapper>();
         services.AddSingleton<IGroupSyncStore, SqliteGroupSyncStore>();
         services.AddSingleton<IMapStore, SqliteMapStore>();
+        services.AddSingleton<IInspectAbnormalPoolStore, SqliteInspectAbnormalPoolStore>();
         services.AddSingleton<IGroupSyncService, GroupSyncService>();
         services.AddSingleton<IOverviewStatsService, OverviewStatsService>();
         services.AddSingleton<IMapService, MapService>();

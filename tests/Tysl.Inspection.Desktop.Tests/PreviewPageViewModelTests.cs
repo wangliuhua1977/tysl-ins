@@ -15,7 +15,7 @@ public sealed class PreviewPageViewModelTests
         var playWinService = new StubPlayWinSvc();
         var viewModel = new PreviewPageViewModel(
             previewService,
-            new InspectAbnormalStore(NullLogger<InspectAbnormalStore>.Instance),
+            CreateStore(),
             playWinService,
             NullLogger<PreviewPageViewModel>.Instance);
 
@@ -44,7 +44,7 @@ public sealed class PreviewPageViewModelTests
         var playWinService = new StubPlayWinSvc();
         var viewModel = new PreviewPageViewModel(
             previewService,
-            new InspectAbnormalStore(NullLogger<InspectAbnormalStore>.Instance),
+            CreateStore(),
             playWinService,
             NullLogger<PreviewPageViewModel>.Instance);
 
@@ -83,7 +83,7 @@ public sealed class PreviewPageViewModelTests
         };
         var viewModel = new PreviewPageViewModel(
             previewService,
-            new InspectAbnormalStore(NullLogger<InspectAbnormalStore>.Instance),
+            CreateStore(),
             new StubPlayWinSvc(),
             NullLogger<PreviewPageViewModel>.Instance);
 
@@ -104,7 +104,7 @@ public sealed class PreviewPageViewModelTests
     }
 
     [Fact]
-    public async Task RequestInspectAsync_AddsSessionAbnormal_AndAllowsReviewedToggle()
+    public async Task RequestInspectAsync_AddsAbnormalPoolItem_AndAllowsReviewedToggle()
     {
         var previewService = new StubPreviewService
         {
@@ -122,7 +122,7 @@ public sealed class PreviewPageViewModelTests
                 "播放器未能完成播放建链。",
                 InspectAbnormalClass.PlayFailed)
         };
-        var store = new InspectAbnormalStore(NullLogger<InspectAbnormalStore>.Instance);
+        var store = CreateStore();
         var viewModel = new PreviewPageViewModel(
             previewService,
             store,
@@ -135,13 +135,45 @@ public sealed class PreviewPageViewModelTests
         var item = Assert.Single(viewModel.AbnormalItems);
         Assert.Equal("播放失败", item.AbnormalClassText);
         Assert.Equal("未复核", item.ReviewedText);
-        Assert.Contains("当前会话异常列表共 1 条", viewModel.AbnormalListHintText);
+        Assert.Contains("当前异常池共 1 条", viewModel.AbnormalListHintText);
 
         viewModel.ToggleReviewedCommand.Execute(item);
 
         var updated = Assert.Single(viewModel.AbnormalItems);
         Assert.True(updated.IsReviewed);
         Assert.Equal("已复核", updated.ReviewedText);
+    }
+
+    [Fact]
+    public async Task RequestInspectAsync_DeduplicatesAbnormalPoolItemsInUi()
+    {
+        var previewService = new StubPreviewService
+        {
+            InspectResult = new InspectResult(
+                DateTimeOffset.Parse("2026-03-28T10:05:00+08:00"),
+                "测试设备",
+                "dev-001",
+                true,
+                "在线",
+                true,
+                true,
+                false,
+                "巡检失败：播放建链失败",
+                "播放建链失败",
+                "播放器未能完成播放建链。",
+                InspectAbnormalClass.PlayFailed)
+        };
+        var viewModel = new PreviewPageViewModel(
+            previewService,
+            CreateStore(),
+            new StubPlayWinSvc(),
+            NullLogger<PreviewPageViewModel>.Instance);
+
+        await viewModel.InitializeAsync();
+        await viewModel.RequestInspectCommand.ExecuteAsync(null);
+        await viewModel.RequestInspectCommand.ExecuteAsync(null);
+
+        Assert.Single(viewModel.AbnormalItems);
     }
 
     [Fact]
@@ -165,7 +197,7 @@ public sealed class PreviewPageViewModelTests
         };
         var viewModel = new PreviewPageViewModel(
             previewService,
-            new InspectAbnormalStore(NullLogger<InspectAbnormalStore>.Instance),
+            CreateStore(),
             new StubPlayWinSvc(),
             NullLogger<PreviewPageViewModel>.Instance);
 
@@ -179,7 +211,7 @@ public sealed class PreviewPageViewModelTests
     }
 
     [Fact]
-    public async Task RequestInspectAsync_DoesNotAddSessionAbnormal_WhenInspectPasses()
+    public async Task RequestInspectAsync_DoesNotAddAbnormalPoolItem_WhenInspectPasses()
     {
         var previewService = new StubPreviewService
         {
@@ -199,7 +231,7 @@ public sealed class PreviewPageViewModelTests
         };
         var viewModel = new PreviewPageViewModel(
             previewService,
-            new InspectAbnormalStore(NullLogger<InspectAbnormalStore>.Instance),
+            CreateStore(),
             new StubPlayWinSvc(),
             NullLogger<PreviewPageViewModel>.Instance);
 
@@ -207,7 +239,7 @@ public sealed class PreviewPageViewModelTests
         await viewModel.RequestInspectCommand.ExecuteAsync(null);
 
         Assert.Empty(viewModel.AbnormalItems);
-        Assert.Contains("当前会话尚无异常项", viewModel.AbnormalListHintText);
+        Assert.Contains("当前异常池暂无异常项", viewModel.AbnormalListHintText);
     }
 
     [Theory]
@@ -222,6 +254,13 @@ public sealed class PreviewPageViewModelTests
     public void PlayText_ToStatus_ReturnsExpectedChineseText(PlayStage stage, string expected)
     {
         Assert.Equal(expected, PlayText.ToStatus(stage));
+    }
+
+    private static InspectAbnormalStore CreateStore()
+    {
+        return new InspectAbnormalStore(
+            new InMemoryInspectAbnormalPoolStore(),
+            NullLogger<InspectAbnormalStore>.Instance);
     }
 
     private sealed class StubPreviewService : IPreviewService
@@ -278,6 +317,36 @@ public sealed class PreviewPageViewModelTests
         {
             Opened.Add(args);
             return null;
+        }
+    }
+
+    private sealed class InMemoryInspectAbnormalPoolStore : IInspectAbnormalPoolStore
+    {
+        private readonly List<InspectAbnormalItem> items = [];
+
+        public IReadOnlyList<InspectAbnormalItem> LoadItems()
+        {
+            return items
+                .OrderByDescending(item => item.InspectAt)
+                .ThenByDescending(item => item.UpdatedAt)
+                .ToArray();
+        }
+
+        public void Upsert(InspectAbnormalItem item)
+        {
+            var index = items.FindIndex(current =>
+                current.Id == item.Id
+                || (string.Equals(current.DeviceCode, item.DeviceCode, StringComparison.OrdinalIgnoreCase)
+                    && current.AbnormalClass == item.AbnormalClass
+                    && string.Equals(current.Conclusion, item.Conclusion, StringComparison.Ordinal)));
+
+            if (index >= 0)
+            {
+                items[index] = item;
+                return;
+            }
+
+            items.Add(item);
         }
     }
 }

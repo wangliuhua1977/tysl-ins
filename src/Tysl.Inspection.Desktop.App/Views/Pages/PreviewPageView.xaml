@@ -274,7 +274,7 @@
                     <TextBlock FontSize="18"
                                FontWeight="SemiBold"
                                Foreground="{DynamicResource PrimaryTextBrush}"
-                               Text="当前会话异常列表" />
+                               Text="当前异常池列表" />
                     <TextBlock Margin="0,8,0,0"
                                Foreground="{DynamicResource SecondaryTextBrush}"
                                TextWrapping="Wrap"

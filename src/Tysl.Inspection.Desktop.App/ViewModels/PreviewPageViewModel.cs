@@ -77,8 +77,8 @@ public sealed partial class PreviewPageViewModel(
         : "请先成功获取 RTSP 地址后再打开播放窗口。";
 
     public string AbnormalListHintText => AbnormalItems.Count > 0
-        ? $"当前会话异常列表共 {AbnormalItems.Count} 条，仅保留内存态；“已复核”仅表示人工已看过。"
-        : "当前会话尚无异常项；巡检通过不会进入列表。";
+        ? $"当前异常池共 {AbnormalItems.Count} 条，已持久化到本地 SQLite；“已复核”仅表示人工已看过。"
+        : "当前异常池暂无异常项；巡检通过不会进入异常池。";
 
     public async Task InitializeAsync()
     {
@@ -347,6 +347,12 @@ public sealed partial class PreviewPageViewModel(
         if (item is null)
         {
             return;
+        }
+
+        var existing = AbnormalItems.FirstOrDefault(current => current.Id == item.Id);
+        if (existing is not null)
+        {
+            AbnormalItems.Remove(existing);
         }
 
         AbnormalItems.Insert(0, item);

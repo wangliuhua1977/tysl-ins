@@ -63,6 +63,13 @@ public interface IInspectAbnormalStore
     InspectAbnormalItem? ToggleReviewed(Guid id);
 }
 
+public interface IInspectAbnormalPoolStore
+{
+    IReadOnlyList<InspectAbnormalItem> LoadItems();
+
+    void Upsert(InspectAbnormalItem item);
+}
+
 public interface IPlayProbe
 {
     Task<PlayProbeResult> ProbeAsync(PlayProbeArgs args, CancellationToken cancellationToken);
@@ -112,14 +119,19 @@ public sealed record InspectAbnormalItem(
     DateTimeOffset InspectAt,
     string DeviceName,
     string DeviceCode,
-    string Conclusion,
+    InspectAbnormalClass AbnormalClass,
     string AbnormalClassText,
+    string Conclusion,
+    string FailureCategory,
     string SummaryText,
-    bool IsReviewed)
+    bool IsReviewed,
+    DateTimeOffset UpdatedAt)
 {
     public string DeviceDisplayText => $"{DeviceName}（{DeviceCode}）";
 
     public string InspectAtText => InspectAt.ToString("yyyy-MM-dd HH:mm:ss");
+
+    public string DispositionSummary => SummaryText;
 
     public string ReviewedText => IsReviewed ? "已复核" : "未复核";
 

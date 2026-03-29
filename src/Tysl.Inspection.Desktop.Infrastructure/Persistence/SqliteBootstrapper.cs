@@ -41,7 +41,23 @@ public sealed class SqliteBootstrapper(
                 FOREIGN KEY (groupId) REFERENCES "Group"(groupId) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS InspectAbnormalPool (
+                id TEXT NOT NULL PRIMARY KEY,
+                deviceCode TEXT NOT NULL,
+                deviceName TEXT NOT NULL,
+                inspectAt TEXT NOT NULL,
+                abnormalClass INTEGER NOT NULL,
+                abnormalClassText TEXT NOT NULL,
+                conclusion TEXT NOT NULL,
+                failureCategory TEXT NOT NULL DEFAULT '',
+                dispositionSummary TEXT NOT NULL,
+                isReviewed INTEGER NOT NULL DEFAULT 0,
+                updatedAt TEXT NOT NULL,
+                UNIQUE(deviceCode, abnormalClass, conclusion)
+            );
+
             CREATE INDEX IF NOT EXISTS IX_Device_GroupId ON Device(groupId);
+            CREATE INDEX IF NOT EXISTS IX_InspectAbnormalPool_InspectAt ON InspectAbnormalPool(inspectAt DESC);
             """;
 
         await using var command = connection.CreateCommand();
