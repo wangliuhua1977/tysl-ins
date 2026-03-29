@@ -130,4 +130,119 @@ public sealed record InspectResult(
         _ when IsAbnormal => string.Empty,
         _ => "无异常/巡检通过"
     };
+
+    public string BuildDispositionSummary()
+    {
+        var parts = new List<string>(6)
+        {
+            $"巡检时间：{InspectAt:yyyy-MM-dd HH:mm:ss}",
+            $"设备：{SanitizeSummaryText(DeviceName)}（{SanitizeSummaryText(DeviceCode)}）",
+            $"结论：{SanitizeSummaryText(Conclusion)}",
+            $"前置归类：{BuildSummaryAbnormalClassText()}"
+        };
+
+        if (!string.IsNullOrWhiteSpace(FailureCategory))
+        {
+            parts.Add($"失败分类：{SanitizeSummaryText(FailureCategory)}");
+        }
+
+        parts.Add($"说明：{BuildSummaryDetailText()}");
+        return string.Join("；", parts);
+    }
+
+    private string BuildSummaryAbnormalClassText()
+    {
+        if (!string.IsNullOrWhiteSpace(AbnormalClassText))
+        {
+            return AbnormalClassText;
+        }
+
+        if (!IsAbnormal)
+        {
+            return "无异常/巡检通过";
+        }
+
+        if (ContainsKeyword(OnlineStatus, "离线")
+            || ContainsKeyword(FailureCategory, "离线")
+            || ContainsKeyword(Conclusion, "离线"))
+        {
+            return "离线";
+        }
+
+        if (ContainsKeyword(FailureCategory, "RTSP")
+            || ContainsKeyword(Conclusion, "RTSP"))
+        {
+            return "RTSP 未就绪";
+        }
+
+        return "播放失败";
+    }
+
+    private string BuildSummaryDetailText()
+    {
+        if (!IsAbnormal && ContainsKeyword(DetailMessage, "Playing"))
+        {
+            return "播放器已进入播放态，画面内容仍需人工复核。";
+        }
+
+        return SanitizeSummaryText(string.IsNullOrWhiteSpace(DetailMessage)
+            ? "未返回最小诊断信息。"
+            : DetailMessage);
+    }
+
+    private static bool ContainsKeyword(string value, string keyword)
+    {
+        return value.Contains(keyword, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string SanitizeSummaryText(string value)
+    {
+        var normalized = value.ReplaceLineEndings(" ").Trim();
+        return MaskRtspText(normalized);
+    }
+
+    private static string MaskRtspText(string value)
+    {
+        var masked = value;
+        masked = ReplaceRtspSegment(masked, "rtsp://");
+        masked = ReplaceRtspSegment(masked, "rtsps://");
+        return masked;
+    }
+
+    private static string ReplaceRtspSegment(string value, string scheme)
+    {
+        const string replacement = "RTSP 地址不展示地址明文";
+        var start = value.IndexOf(scheme, StringComparison.OrdinalIgnoreCase);
+
+        while (start >= 0)
+        {
+            var end = start;
+            while (end < value.Length && !IsRtspBoundary(value[end]))
+            {
+                end++;
+            }
+
+            value = value[..start] + replacement + value[end..];
+            start = value.IndexOf(scheme, start + replacement.Length, StringComparison.OrdinalIgnoreCase);
+        }
+
+        return value;
+    }
+
+    private static bool IsRtspBoundary(char value)
+    {
+        return char.IsWhiteSpace(value)
+            || value is ';'
+            || value is '；'
+            || value is ','
+            || value is '，'
+            || value is '.'
+            || value is '。'
+            || value is ')'
+            || value is '）'
+            || value is ']'
+            || value is '】'
+            || value is '"'
+            || value is '\'';
+    }
 }

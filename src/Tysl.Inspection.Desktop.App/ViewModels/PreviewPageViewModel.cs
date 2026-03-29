@@ -64,6 +64,9 @@ public sealed partial class PreviewPageViewModel(
     [ObservableProperty]
     private string inspectAtText = "暂无";
 
+    [ObservableProperty]
+    private string inspectSummaryText = "仅在发起巡检诊断后生成最小处置摘要。";
+
     public bool IsPlayWindowReady => CanOpenPlayWindow();
 
     public string PlayWindowHintText => IsPlayWindowReady
@@ -304,6 +307,12 @@ public sealed partial class PreviewPageViewModel(
             $"在线状态：{result.OnlineStatus} | RTSP：{(result.RtspReady ? "已就绪" : "未就绪")} | 播放建链：{(result.PlaybackStarted ? "已启动" : "未启动")} | Playing：{(result.EnteredPlaying ? "已进入" : "未进入")}";
         InspectDetailText = result.DetailMessage;
         InspectAtText = result.InspectAt.ToString("yyyy-MM-dd HH:mm:ss");
+        logger.LogInformation("Inspect disposition summary generation started for {DeviceCode}.", result.DeviceCode);
+        InspectSummaryText = result.BuildDispositionSummary();
+        logger.LogInformation(
+            "Inspect disposition summary generation completed for {DeviceCode}. SummaryLength={SummaryLength}.",
+            result.DeviceCode,
+            InspectSummaryText.Length);
     }
 
     private void ResetInspectResult()
@@ -314,5 +323,6 @@ public sealed partial class PreviewPageViewModel(
         InspectStageText = "在线状态：暂无 | RTSP：未校验 | 播放建链：未启动 | Playing：未进入";
         InspectDetailText = "仅在发起巡检诊断后展示最小结果。";
         InspectAtText = "暂无";
+        InspectSummaryText = "仅在发起巡检诊断后生成最小处置摘要。";
     }
 }

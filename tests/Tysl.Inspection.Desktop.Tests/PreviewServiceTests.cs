@@ -156,6 +156,10 @@ public sealed class PreviewServiceTests
         Assert.True(result.IsAbnormal);
         Assert.Equal(InspectAbnormalClass.Offline, result.AbnormalClass);
         Assert.Equal("离线", result.AbnormalClassText);
+        var summary = result.BuildDispositionSummary();
+        Assert.Contains("结论：巡检失败：设备离线", summary);
+        Assert.Contains("前置归类：离线", summary);
+        Assert.Contains("失败分类：设备离线", summary);
         Assert.False(client.PreviewUrlRequested);
         Assert.False(probe.ProbeRequested);
     }
@@ -192,6 +196,10 @@ public sealed class PreviewServiceTests
         Assert.True(result.IsAbnormal);
         Assert.Equal(InspectAbnormalClass.RtspNotReady, result.AbnormalClass);
         Assert.Equal("RTSP 未就绪", result.AbnormalClassText);
+        var summary = result.BuildDispositionSummary();
+        Assert.Contains("结论：巡检失败：RTSP 地址未就绪", summary);
+        Assert.Contains("前置归类：RTSP 未就绪", summary);
+        Assert.Contains("失败分类：RTSP 响应解密失败", summary);
         Assert.True(client.PreviewUrlRequested);
         Assert.False(probe.ProbeRequested);
     }
@@ -260,6 +268,10 @@ public sealed class PreviewServiceTests
         Assert.True(result.IsAbnormal);
         Assert.Equal(InspectAbnormalClass.PlayFailed, result.AbnormalClass);
         Assert.Equal("播放失败", result.AbnormalClassText);
+        var summary = result.BuildDispositionSummary();
+        Assert.Contains("结论：巡检失败：播放建链失败", summary);
+        Assert.Contains("前置归类：播放失败", summary);
+        Assert.Contains("失败分类：播放建链失败", summary);
         Assert.True(probe.ProbeRequested);
     }
 
@@ -303,7 +315,34 @@ public sealed class PreviewServiceTests
         Assert.False(result.IsAbnormal);
         Assert.Equal(InspectAbnormalClass.None, result.AbnormalClass);
         Assert.Equal("无异常/巡检通过", result.AbnormalClassText);
+        var summary = result.BuildDispositionSummary();
+        Assert.Contains("结论：巡检通过", summary);
+        Assert.Contains("前置归类：无异常/巡检通过", summary);
+        Assert.DoesNotContain("失败分类：", summary);
         Assert.True(probe.ProbeRequested);
+    }
+
+    [Fact]
+    public void BuildDispositionSummary_MasksFullRtspAddress_WhenDetailContainsRtsp()
+    {
+        var result = new InspectResult(
+            DateTimeOffset.Parse("2026-03-29T10:00:00+08:00"),
+            "测试设备",
+            "dev-001",
+            true,
+            "在线",
+            true,
+            true,
+            false,
+            "巡检失败：播放建链失败",
+            "播放建链失败",
+            "播放器输出原始地址 rtsp://demo/live/dev-001?token=abc 后建链失败。",
+            InspectAbnormalClass.PlayFailed);
+
+        var summary = result.BuildDispositionSummary();
+
+        Assert.DoesNotContain("rtsp://demo/live/dev-001?token=abc", summary);
+        Assert.Contains("RTSP 地址不展示地址明文", summary);
     }
 
     private sealed class StubOpenPlatformClient : IOpenPlatformClient

@@ -94,6 +94,9 @@ public sealed class PreviewPageViewModelTests
         Assert.Contains("Playing：未进入", viewModel.InspectStageText);
         Assert.Equal("播放器未能完成播放建链。", viewModel.InspectDetailText);
         Assert.Equal("2026-03-28 10:05:00", viewModel.InspectAtText);
+        Assert.Contains("巡检时间：2026-03-28 10:05:00", viewModel.InspectSummaryText);
+        Assert.Contains("设备：测试设备（dev-001）", viewModel.InspectSummaryText);
+        Assert.Contains("前置归类：播放失败", viewModel.InspectSummaryText);
     }
 
     [Fact]
