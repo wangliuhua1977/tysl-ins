@@ -51,9 +51,11 @@ public sealed class MapServiceTests
         Assert.Single(result.Devices);
         Assert.Equal("31.224361", result.Devices[0].MapLatitude);
         Assert.Equal("121.469170", result.Devices[0].MapLongitude);
+        Assert.Equal("amap_js_convert_from_baidu", result.Devices[0].CoordinateSource);
         var saved = Assert.Single(groupStore.UpdatedDevices);
         Assert.Equal("31.224361", saved.MapLatitude);
         Assert.Equal("121.469170", saved.MapLongitude);
+        Assert.Equal("amap_js_convert_from_baidu", saved.CoordinateSource);
     }
 
     [Fact]
@@ -130,6 +132,7 @@ public sealed class MapServiceTests
         var savedSuccess = Assert.Single(groupStore.UpdatedDevices, device => device.DeviceCode == "dev-001");
         var savedFailure = Assert.Single(groupStore.UpdatedDevices, device => device.DeviceCode == "dev-002");
         Assert.Equal("31.224361", savedSuccess.MapLatitude);
+        Assert.Equal("amap_js_convert_from_baidu", savedSuccess.CoordinateSource);
         Assert.Equal(CoordinateStateCatalog.Available, savedSuccess.CoordinateStatus);
         Assert.Equal(CoordinateStateCatalog.Failed, savedFailure.CoordinateStatus);
         Assert.Contains("invalid params", savedFailure.CoordinateStatusMessage);

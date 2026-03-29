@@ -245,6 +245,11 @@ public sealed partial class MapPageViewModel(
 
     private static string GetCoordinateSourceText(InspectionDevice device)
     {
+        if (string.Equals(device.CoordinateSource, "amap_js_convert_from_baidu", StringComparison.OrdinalIgnoreCase))
+        {
+            return "高德 JS 坐标转换(BD-09 -> GCJ-02)";
+        }
+
         return string.Equals(device.CoordinateSource, "platform", StringComparison.OrdinalIgnoreCase)
             ? "平台原始坐标（BD-09）"
             : "无";

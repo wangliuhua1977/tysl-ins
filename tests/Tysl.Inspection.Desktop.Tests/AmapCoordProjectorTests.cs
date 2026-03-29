@@ -151,4 +151,68 @@ public sealed class AmapCoordProjectorTests
         Assert.Equal("31.224361", item.ResultLatitude);
         Assert.Equal("121.469170", item.ResultLongitude);
     }
+
+    [Fact]
+    public void ClassifyPayloadKind_DetectsEmptyObjectAfterStringWrapping()
+    {
+        var responseJson = JsonSerializer.Serialize("{}");
+
+        var kind = AmapCoordProjector.ClassifyPayloadKind(responseJson);
+
+        Assert.Equal("empty_object", kind);
+    }
+
+    [Fact]
+    public void ParseBatchPayload_ReadsErrorFieldsUsingNewEnvelopeShape()
+    {
+        const string responseJson = """
+            {
+              "type": "coord-conversion-batch",
+              "protocolVersion": "1.1",
+              "requestedCount": 1,
+              "successCount": 0,
+              "failedCount": 1,
+              "missingCount": 0,
+              "errorCount": 1,
+              "items": [
+                {
+                  "deviceCode": "dev-009",
+                  "rawLatitude": "31.2304",
+                  "rawLongitude": "121.4737",
+                  "hasRawCoordinate": true,
+                  "hasMapCoordinate": false,
+                  "coordinateState": "failed",
+                  "coordinateStateText": "高德回传值非法",
+                  "coordinateWarning": "AMap.convertFrom returned invalid coordinates.",
+                  "errorStage": "result-parse",
+                  "errorCode": "result_location_invalid",
+                  "errorMessage": "AMap.convertFrom returned invalid coordinates.",
+                  "rawResultSnippet": "{\"lng\":null,\"lat\":31.2}",
+                  "conversionStatus": "complete",
+                  "conversionInfo": "ok",
+                  "resultLocationKind": "object"
+                }
+              ],
+              "errors": [
+                {
+                  "stage": "result-parse",
+                  "deviceCode": "dev-009",
+                  "errorCode": "result_location_invalid",
+                  "message": "AMap.convertFrom returned invalid coordinates."
+                }
+              ]
+            }
+            """;
+
+        var payload = AmapCoordProjector.ParseBatchPayload(responseJson);
+        var item = Assert.Single(payload.Items);
+        var error = Assert.Single(payload.Errors);
+
+        Assert.Equal("result-parse", item.ErrorStage);
+        Assert.Equal("result_location_invalid", item.ErrorCode);
+        Assert.Equal("AMap.convertFrom returned invalid coordinates.", item.ErrorMessage);
+        Assert.Equal("{\"lng\":null,\"lat\":31.2}", item.RawResultSnippet);
+        Assert.Equal("result-parse", error.Stage);
+        Assert.Equal("result_location_invalid", error.ErrorCode);
+    }
 }

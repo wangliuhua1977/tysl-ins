@@ -40,6 +40,9 @@ public sealed class MapService(
 
             if (changedCacheDevices.Length > 0)
             {
+                logger.LogInformation(
+                    "Coordinate render cache write started. DeviceCount={DeviceCount}.",
+                    changedCacheDevices.Length);
                 await groupSyncStore.UpdateDevicePlatformDataAsync(changedCacheDevices, cancellationToken);
                 logger.LogInformation(
                     "Coordinate render cache write completed. DeviceCount={DeviceCount}.",
@@ -84,6 +87,9 @@ public sealed class MapService(
                 {
                     MapLatitude = projection.HasMapCoordinate ? projection.MapLatitude : null,
                     MapLongitude = projection.HasMapCoordinate ? projection.MapLongitude : null,
+                    CoordinateSource = projection.HasMapCoordinate
+                        ? "amap_js_convert_from_baidu"
+                        : device.CoordinateSource,
                     CoordinateStatus = projection.CoordinateState,
                     CoordinateStatusMessage = projection.CoordinateWarning
                 };
@@ -95,6 +101,7 @@ public sealed class MapService(
     {
         return !string.Equals(original.MapLatitude, updated.MapLatitude, StringComparison.Ordinal)
                || !string.Equals(original.MapLongitude, updated.MapLongitude, StringComparison.Ordinal)
+               || !string.Equals(original.CoordinateSource, updated.CoordinateSource, StringComparison.Ordinal)
                || !string.Equals(original.CoordinateStatus, updated.CoordinateStatus, StringComparison.Ordinal)
                || !string.Equals(original.CoordinateStatusMessage, updated.CoordinateStatusMessage, StringComparison.Ordinal);
     }

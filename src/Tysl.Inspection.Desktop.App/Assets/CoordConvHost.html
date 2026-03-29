@@ -7,7 +7,29 @@
 <body>
     <script>
         const ProtocolType = "coord-conversion-batch";
-        const ProtocolVersion = "1.0";
+        const ProtocolVersion = "1.1";
+
+        const hostState = {
+            config: null,
+            scriptLoadPromise: null,
+            ready: false,
+            readyError: ""
+        };
+
+        function postHostMessage(type, payload) {
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage(Object.assign({ type }, payload || {}));
+            }
+        }
+
+        function postLog(message, payload, level) {
+            postHostMessage("coord-conv-log", Object.assign(
+                {
+                    message,
+                    level: level || "info"
+                },
+                payload || {}));
+        }
 
         function formatCoordinate(value) {
             return Number(value).toFixed(6);
@@ -18,26 +40,48 @@
             return Number.isFinite(number) ? number : null;
         }
 
-        function buildResultShape(value) {
+        function resultKind(value) {
             if (Array.isArray(value)) {
                 return "array";
             }
 
-            if (value === null || value === undefined) {
+            if (value === null) {
                 return "null";
             }
 
             return typeof value;
         }
 
-        function buildBatchPayload(items, errors) {
+        function trimSnippet(value, maxLength) {
+            const text = typeof value === "string"
+                ? value
+                : JSON.stringify(value);
+            if (!text) {
+                return "";
+            }
+
+            return text.length <= maxLength
+                ? text
+                : text.slice(0, maxLength);
+        }
+
+        function buildBatchError(stage, message, errorCode, deviceCode) {
+            return {
+                stage: stage || "unknown",
+                message: message || "No detailed error message returned.",
+                errorCode: errorCode || "",
+                deviceCode: deviceCode || ""
+            };
+        }
+
+        function buildEnvelope(items, errors, requestedCount) {
             const safeItems = Array.isArray(items) ? items : [];
             const safeErrors = Array.isArray(errors) ? errors : [];
 
             return {
                 type: ProtocolType,
                 protocolVersion: ProtocolVersion,
-                requestedCount: safeItems.length,
+                requestedCount: typeof requestedCount === "number" ? requestedCount : safeItems.length,
                 successCount: safeItems.filter((item) => item && item.hasMapCoordinate).length,
                 failedCount: safeItems.filter((item) => item && item.coordinateState === "failed").length,
                 missingCount: safeItems.filter((item) => item && item.coordinateState === "missing").length,
@@ -47,42 +91,99 @@
             };
         }
 
-        function buildBatchError(stage, message) {
-            return {
-                stage: stage || "unknown",
-                message: message || "未返回明确错误信息。"
-            };
-        }
-
         function buildFailedPoint(point, options) {
             const safeOptions = options || {};
-            const stateText = safeOptions.coordinateStateText || "坐标转换或解析失败";
-            const warning = safeOptions.coordinateWarning || "坐标转换或解析失败。";
+            const errorMessage = safeOptions.errorMessage || "Coordinate conversion or parsing failed.";
 
-            return Object.assign({}, point, {
-                coordinateState: "failed",
-                coordinateStateText: stateText,
-                coordinateWarning: warning,
+            return {
+                deviceCode: point.deviceCode || "",
+                rawLatitude: point.rawLatitude ?? null,
+                rawLongitude: point.rawLongitude ?? null,
+                hasRawCoordinate: safeOptions.hasRawCoordinate ?? true,
                 hasMapCoordinate: false,
+                coordinateState: safeOptions.coordinateState || "failed",
+                coordinateStateText: safeOptions.coordinateStateText || "坐标转换或解析失败",
+                coordinateWarning: safeOptions.coordinateWarning || errorMessage,
                 mapLatitude: null,
                 mapLongitude: null,
-                failureStage: safeOptions.failureStage || "unknown",
-                failureReasonCode: safeOptions.failureReasonCode || "unknown",
+                errorStage: safeOptions.errorStage || "unknown",
+                errorCode: safeOptions.errorCode || "unknown",
+                errorMessage,
+                rawResultSnippet: safeOptions.rawResultSnippet || "",
                 conversionStatus: safeOptions.conversionStatus || "",
                 conversionInfo: safeOptions.conversionInfo || "",
                 resultLocationKind: safeOptions.resultLocationKind || "",
-                resultLongitude: safeOptions.resultLongitude ?? null,
-                resultLatitude: safeOptions.resultLatitude ?? null
-            });
+                resultLatitude: safeOptions.resultLatitude ?? null,
+                resultLongitude: safeOptions.resultLongitude ?? null
+            };
+        }
+
+        function buildAvailablePoint(point, resolved, status, info) {
+            return {
+                deviceCode: point.deviceCode || "",
+                rawLatitude: point.rawLatitude ?? null,
+                rawLongitude: point.rawLongitude ?? null,
+                hasRawCoordinate: true,
+                hasMapCoordinate: true,
+                coordinateState: "available",
+                coordinateStateText: "已获取并转换坐标",
+                coordinateWarning: "地图 marker 仅使用转换后的高德坐标。",
+                mapLatitude: resolved.lat,
+                mapLongitude: resolved.lng,
+                errorStage: "",
+                errorCode: "",
+                errorMessage: "",
+                rawResultSnippet: "",
+                conversionStatus: status || "",
+                conversionInfo: info || "",
+                resultLocationKind: resolved.resultLocationKind || "",
+                resultLatitude: resolved.resultLatitude || resolved.lat,
+                resultLongitude: resolved.resultLongitude || resolved.lng
+            };
+        }
+
+        function parseConfig(rawConfig) {
+            if (!rawConfig) {
+                return {};
+            }
+
+            if (typeof rawConfig === "string") {
+                const text = rawConfig.trim();
+                return text ? JSON.parse(text) : {};
+            }
+
+            return rawConfig;
+        }
+
+        function parsePoints(rawJson) {
+            if (Array.isArray(rawJson)) {
+                return rawJson;
+            }
+
+            if (typeof rawJson === "string") {
+                const text = rawJson.trim();
+                if (!text) {
+                    return [];
+                }
+
+                const parsed = JSON.parse(text);
+                return Array.isArray(parsed) ? parsed : [];
+            }
+
+            return [];
         }
 
         async function ensureMapScript(config) {
-            if (window.AMap) {
+            if (window.AMap && typeof window.AMap.convertFrom === "function") {
                 return;
             }
 
             if (!config || !config.jsKey) {
-                throw new Error("缺少高德地图 Key，无法执行坐标转换。");
+                throw new Error("Missing AMap JS key.");
+            }
+
+            if (hostState.scriptLoadPromise) {
+                return hostState.scriptLoadPromise;
             }
 
             if (config.securityJsCode) {
@@ -91,257 +192,426 @@
                 };
             }
 
-            await new Promise((resolve, reject) => {
+            postLog("CoordConv script load started", {
+                jsApiVersion: config.jsApiVersion || "2.0"
+            });
+
+            hostState.scriptLoadPromise = new Promise((resolve, reject) => {
                 const script = document.createElement("script");
                 script.src = `https://webapi.amap.com/maps?v=${encodeURIComponent(config.jsApiVersion || "2.0")}&key=${encodeURIComponent(config.jsKey)}`;
-                script.onload = () => resolve();
-                script.onerror = () => reject(new Error("高德地图脚本加载失败，请检查 Key 配置或网络连接。"));
+                script.onload = () => {
+                    postLog("CoordConv script load completed", {
+                        hasConvertFrom: !!(window.AMap && typeof window.AMap.convertFrom === "function")
+                    });
+                    resolve();
+                };
+                script.onerror = () => {
+                    const error = new Error("Failed to load AMap JS SDK.");
+                    postLog("CoordConv script load failed", {
+                        errorMessage: error.message
+                    }, "error");
+                    hostState.scriptLoadPromise = null;
+                    reject(error);
+                };
                 document.head.appendChild(script);
             });
+
+            return hostState.scriptLoadPromise;
+        }
+
+        function normalizeLocations(result) {
+            if (Array.isArray(result?.locations)) {
+                return result.locations;
+            }
+
+            if (typeof result?.locations === "string") {
+                const text = result.locations.trim();
+                if (!text) {
+                    return [];
+                }
+
+                if (text.includes("|")) {
+                    return text.split("|").map((item) => item.trim()).filter(Boolean);
+                }
+
+                if (text.includes(";")) {
+                    return text.split(";").map((item) => item.trim()).filter(Boolean);
+                }
+
+                return [text];
+            }
+
+            if (result && result.locations) {
+                return [result.locations];
+            }
+
+            if (Array.isArray(result)) {
+                return result;
+            }
+
+            if (typeof result === "string") {
+                return [result];
+            }
+
+            if (result) {
+                return [result];
+            }
+
+            return [];
         }
 
         function resolveStringLocation(value) {
             const text = String(value || "").trim();
             if (!text) {
-                throw new Error("高德坐标转换未返回结果。");
+                throw new Error("AMap.convertFrom returned an empty location string.");
             }
 
             const firstPair = text.split(";")[0];
             const parts = firstPair.split(",");
             if (parts.length < 2) {
-                throw new Error("高德坐标转换结果无效。");
+                throw new Error("AMap.convertFrom returned an invalid location string.");
             }
 
             const lng = toFiniteCoordinate(parts[0]);
             const lat = toFiniteCoordinate(parts[1]);
             if (lng === null || lat === null) {
-                throw new Error("高德坐标转换结果无效。");
-            }
-
-            return {
-                lng,
-                lat,
-                resultLocationKind: "string"
-            };
-        }
-
-        function resolveConvertedLocation(result) {
-            const location = Array.isArray(result?.locations)
-                ? result.locations[0]
-                : result?.locations || result;
-
-            if (!location) {
-                throw new Error("高德坐标转换未返回结果。");
-            }
-
-            if (typeof location === "string") {
-                const parsed = resolveStringLocation(location);
-                return {
-                    lng: formatCoordinate(parsed.lng),
-                    lat: formatCoordinate(parsed.lat),
-                    resultLocationKind: parsed.resultLocationKind,
-                    resultLongitude: formatCoordinate(parsed.lng),
-                    resultLatitude: formatCoordinate(parsed.lat)
-                };
-            }
-
-            const lng = typeof location.getLng === "function"
-                ? location.getLng()
-                : Array.isArray(location)
-                    ? location[0]
-                    : location.lng;
-            const lat = typeof location.getLat === "function"
-                ? location.getLat()
-                : Array.isArray(location)
-                    ? location[1]
-                    : location.lat;
-
-            if (!Number.isFinite(Number(lng)) || !Number.isFinite(Number(lat))) {
-                throw new Error("高德坐标转换结果无效。");
+                throw new Error("AMap.convertFrom returned non-numeric coordinates.");
             }
 
             return {
                 lng: formatCoordinate(lng),
                 lat: formatCoordinate(lat),
-                resultLocationKind: buildResultShape(location),
+                resultLocationKind: "string",
                 resultLongitude: formatCoordinate(lng),
                 resultLatitude: formatCoordinate(lat)
             };
         }
 
-        function buildIncompleteReason(status, result) {
-            const parts = [];
-            const normalizedStatus = String(status || "").trim();
-            const info = result && typeof result.info === "string"
-                ? result.info.trim()
-                : "";
-
-            if (normalizedStatus) {
-                parts.push(`status=${normalizedStatus}`);
+        function resolveLocation(location) {
+            if (typeof location === "string") {
+                return resolveStringLocation(location);
             }
 
-            if (info) {
-                parts.push(info);
+            const lng = typeof location?.getLng === "function"
+                ? location.getLng()
+                : Array.isArray(location)
+                    ? location[0]
+                    : location?.lng;
+            const lat = typeof location?.getLat === "function"
+                ? location.getLat()
+                : Array.isArray(location)
+                    ? location[1]
+                    : location?.lat;
+
+            if (!Number.isFinite(Number(lng)) || !Number.isFinite(Number(lat))) {
+                throw new Error("AMap.convertFrom returned invalid coordinates.");
             }
 
-            return parts.length > 0
-                ? `高德坐标转换未完成：${parts.join(" / ")}`
-                : "高德坐标转换未完成，需人工确认。";
+            return {
+                lng: formatCoordinate(lng),
+                lat: formatCoordinate(lat),
+                resultLocationKind: resultKind(location),
+                resultLongitude: formatCoordinate(lng),
+                resultLatitude: formatCoordinate(lat)
+            };
         }
 
-        async function convertPoint(point, rawCoordinateSystem) {
-            if (!point.hasRawCoordinate) {
-                return Object.assign({}, point, {
-                    coordinateState: "missing",
-                    coordinateStateText: "平台未提供坐标",
-                    coordinateWarning: "平台未提供坐标，当前不进入上图。",
-                    hasMapCoordinate: false,
-                    mapLatitude: null,
-                    mapLongitude: null,
-                    failureStage: "",
-                    failureReasonCode: "",
-                    conversionStatus: "",
-                    conversionInfo: "",
-                    resultLocationKind: "",
-                    resultLongitude: null,
-                    resultLatitude: null
-                });
-            }
+        function validatePoint(point) {
+            const lng = toFiniteCoordinate(point.rawLongitude);
+            const lat = toFiniteCoordinate(point.rawLatitude);
 
-            if (!window.AMap || typeof window.AMap.convertFrom !== "function") {
-                return buildFailedPoint(point, {
-                    coordinateStateText: "高德脚本未就绪",
-                    coordinateWarning: "高德地图坐标转换能力不可用，需人工确认。",
-                    failureStage: "load-script",
-                    failureReasonCode: "convert_from_unavailable"
-                });
-            }
-
-            return await new Promise((resolve) => {
-                const lng = toFiniteCoordinate(point.rawLongitude);
-                const lat = toFiniteCoordinate(point.rawLatitude);
-                if (lng === null || lat === null) {
-                    resolve(buildFailedPoint(point, {
+            if (lng === null || lat === null) {
+                return {
+                    valid: false,
+                    failure: buildFailedPoint(point, {
                         coordinateStateText: "原始坐标格式非法",
-                        coordinateWarning: `高德 JS 输入坐标不是有效数字：${point.rawLatitude || "null"} / ${point.rawLongitude || "null"}。`,
-                        failureStage: "input-validate",
-                        failureReasonCode: "raw_coordinate_not_numeric"
-                    }));
-                    return;
-                }
+                        coordinateWarning: "高德 JS 输入坐标不是有效数字。",
+                        errorStage: "input-validate",
+                        errorCode: "raw_coordinate_not_numeric",
+                        errorMessage: "Input coordinates are not finite numbers."
+                    })
+                };
+            }
 
-                if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-                    resolve(buildFailedPoint(point, {
+            if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+                return {
+                    valid: false,
+                    failure: buildFailedPoint(point, {
                         coordinateStateText: "原始坐标越界",
-                        coordinateWarning: `高德 JS 输入坐标超出范围：${formatCoordinate(lat)} / ${formatCoordinate(lng)}。`,
-                        failureStage: "input-validate",
-                        failureReasonCode: "raw_coordinate_out_of_range"
-                    }));
-                    return;
-                }
+                        coordinateWarning: "高德 JS 输入坐标超出范围。",
+                        errorStage: "input-validate",
+                        errorCode: "raw_coordinate_out_of_range",
+                        errorMessage: "Input coordinates are out of range."
+                    })
+                };
+            }
 
-                window.AMap.convertFrom([lng, lat], rawCoordinateSystem || "baidu", (status, result) => {
-                    const info = result && typeof result.info === "string"
-                        ? result.info.trim()
-                        : "";
-                    if (status !== "complete") {
-                        resolve(buildFailedPoint(point, {
-                            coordinateStateText: "高德坐标转换返回失败",
-                            coordinateWarning: buildIncompleteReason(status, result),
-                            failureStage: "convert-from",
-                            failureReasonCode: "convert_from_failed",
-                            conversionStatus: String(status || ""),
-                            conversionInfo: info,
-                            resultLocationKind: buildResultShape(result?.locations)
-                        }));
-                        return;
-                    }
+            if (lng === 0 && lat === 0) {
+                return {
+                    valid: false,
+                    failure: buildFailedPoint(point, {
+                        coordinateStateText: "原始坐标为原点",
+                        coordinateWarning: "平台原始坐标为 0,0，当前不上图。",
+                        errorStage: "input-validate",
+                        errorCode: "raw_coordinate_origin",
+                        errorMessage: "Input coordinates are the 0,0 origin."
+                    })
+                };
+            }
 
-                    try {
-                        const converted = resolveConvertedLocation(result);
-                        resolve(Object.assign({}, point, {
-                            coordinateState: "available",
-                            coordinateStateText: "已获取并转换坐标",
-                            coordinateWarning: "地图 marker 仅使用转换后的高德坐标。",
-                            hasMapCoordinate: true,
-                            mapLatitude: converted.lat,
-                            mapLongitude: converted.lng,
-                            failureStage: "",
-                            failureReasonCode: "",
-                            conversionStatus: String(status || ""),
-                            conversionInfo: info,
-                            resultLocationKind: converted.resultLocationKind || buildResultShape(result?.locations),
-                            resultLongitude: converted.resultLongitude || converted.lng,
-                            resultLatitude: converted.resultLatitude || converted.lat
-                        }));
-                    } catch (error) {
-                        resolve(buildFailedPoint(point, {
-                            coordinateStateText: "高德回传值非法",
-                            coordinateWarning: error && error.message
-                                ? error.message
-                                : "高德坐标转换结果无效，需人工确认。",
-                            failureStage: "result-validate",
-                            failureReasonCode: "js_result_invalid",
-                            conversionStatus: String(status || ""),
-                            conversionInfo: info,
-                            resultLocationKind: buildResultShape(result?.locations)
-                        }));
-                    }
+            return {
+                valid: true,
+                lng,
+                lat
+            };
+        }
+
+        function buildBatchFailure(points, errorStage, errorCode, errorMessage) {
+            return points.map((point) => {
+                postLog("AMap.convertFrom item failed", {
+                    deviceCode: point.deviceCode || "",
+                    errorStage,
+                    errorCode,
+                    errorMessage
+                }, "warning");
+
+                return buildFailedPoint(point, {
+                    coordinateStateText: "高德坐标转换返回失败",
+                    coordinateWarning: errorMessage,
+                    errorStage,
+                    errorCode,
+                    errorMessage
                 });
             });
         }
 
-        window.coordConv = {
-            async convertBatch(points, config) {
-                const safePoints = Array.isArray(points) ? points : [];
-                if (!safePoints.some((point) => point.hasRawCoordinate)) {
-                    return buildBatchPayload(
-                        await Promise.all(
-                            safePoints.map((point) => convertPoint(point, config?.rawCoordinateSystem || "baidu"))
-                        ),
-                        []);
+        async function runBatchConversion(points, config) {
+            const ordered = Array.isArray(points) ? points : [];
+            const prepared = [];
+            const failuresByIndex = new Map();
+
+            ordered.forEach((point, index) => {
+                const validation = validatePoint(point);
+                if (!validation.valid) {
+                    failuresByIndex.set(index, validation.failure);
+                    postLog("AMap.convertFrom item failed", {
+                        deviceCode: point.deviceCode || "",
+                        errorStage: validation.failure.errorStage,
+                        errorCode: validation.failure.errorCode,
+                        errorMessage: validation.failure.errorMessage
+                    }, "warning");
+                    return;
                 }
 
+                prepared.push({
+                    index,
+                    point,
+                    lng: validation.lng,
+                    lat: validation.lat
+                });
+            });
+
+            if (prepared.length === 0) {
+                const items = ordered.map((_, index) => failuresByIndex.get(index));
+                return buildEnvelope(items, [], ordered.length);
+            }
+
+            return await new Promise((resolve) => {
+                const sourceLocations = prepared.map((item) => [item.lng, item.lat]);
                 try {
-                    await ensureMapScript(config || {});
+                    window.AMap.convertFrom(sourceLocations, (config && config.rawCoordinateSystem) || "baidu", (status, result) => {
+                        const info = result && typeof result.info === "string"
+                            ? result.info.trim()
+                            : "";
+                        const locations = normalizeLocations(result);
+
+                        postLog("AMap.convertFrom callback received", {
+                            status: String(status || ""),
+                            info,
+                            resultKind: resultKind(result),
+                            locationCount: locations.length
+                        });
+
+                        if (status !== "complete") {
+                            const failures = buildBatchFailure(
+                                prepared.map((item) => item.point),
+                                "convert-from",
+                                "convert_from_failed",
+                                `status=${String(status || "unknown")}${info ? ` / ${info}` : ""}`);
+                            prepared.forEach((item, index) => failuresByIndex.set(item.index, failures[index]));
+                            resolve(buildEnvelope(
+                                ordered.map((_, index) => failuresByIndex.get(index)),
+                                [buildBatchError("convert-from", `status=${String(status || "unknown")}${info ? ` / ${info}` : ""}`, "convert_from_failed")],
+                                ordered.length));
+                            return;
+                        }
+
+                        prepared.forEach((item, preparedIndex) => {
+                            const location = preparedIndex < locations.length ? locations[preparedIndex] : null;
+                            if (!location) {
+                                const failure = buildFailedPoint(item.point, {
+                                    coordinateStateText: "高德回传值非法",
+                                    coordinateWarning: "高德坐标转换结果缺失。",
+                                    errorStage: "result-parse",
+                                    errorCode: "missing_result_location",
+                                    errorMessage: "No converted location was returned for the current device.",
+                                    rawResultSnippet: trimSnippet(result, 300)
+                                });
+                                failuresByIndex.set(item.index, failure);
+                                postLog("AMap.convertFrom item failed", {
+                                    deviceCode: item.point.deviceCode || "",
+                                    errorStage: failure.errorStage,
+                                    errorCode: failure.errorCode,
+                                    errorMessage: failure.errorMessage
+                                }, "warning");
+                                return;
+                            }
+
+                            try {
+                                const resolvedLocation = resolveLocation(location);
+                                const success = buildAvailablePoint(item.point, resolvedLocation, String(status || ""), info);
+                                failuresByIndex.set(item.index, success);
+                                postLog("AMap.convertFrom item resolved", {
+                                    deviceCode: item.point.deviceCode || "",
+                                    inputLongitude: formatCoordinate(item.lng),
+                                    inputLatitude: formatCoordinate(item.lat),
+                                    outputLongitude: success.mapLongitude,
+                                    outputLatitude: success.mapLatitude,
+                                    resultLocationKind: success.resultLocationKind
+                                });
+                            } catch (error) {
+                                const failure = buildFailedPoint(item.point, {
+                                    coordinateStateText: "高德回传值非法",
+                                    coordinateWarning: error && error.message
+                                        ? error.message
+                                        : "高德坐标转换结果无效。",
+                                    errorStage: "result-parse",
+                                    errorCode: "result_location_invalid",
+                                    errorMessage: error && error.message
+                                        ? error.message
+                                        : "Failed to parse converted location.",
+                                    rawResultSnippet: trimSnippet(location, 300),
+                                    resultLocationKind: resultKind(location)
+                                });
+                                failuresByIndex.set(item.index, failure);
+                                postLog("AMap.convertFrom item failed", {
+                                    deviceCode: item.point.deviceCode || "",
+                                    errorStage: failure.errorStage,
+                                    errorCode: failure.errorCode,
+                                    errorMessage: failure.errorMessage
+                                }, "warning");
+                            }
+                        });
+
+                        resolve(buildEnvelope(
+                            ordered.map((_, index) => failuresByIndex.get(index)),
+                            [],
+                            ordered.length));
+                    });
                 } catch (error) {
                     const message = error && error.message
                         ? error.message
-                        : "高德地图脚本加载失败，请检查 Key 配置或网络连接。";
-                    return buildBatchPayload(
-                        safePoints.map((point) => point.hasRawCoordinate
-                            ? buildFailedPoint(point, {
-                                coordinateStateText: "高德脚本加载失败",
-                                coordinateWarning: message,
-                                failureStage: "load-script",
-                                failureReasonCode: "script_load_failed"
-                            })
-                            : point),
-                        [buildBatchError("load-script", message)]);
+                        : "AMap.convertFrom threw an unexpected error.";
+                    const failures = buildBatchFailure(
+                        prepared.map((item) => item.point),
+                        "convert-throw",
+                        "convert_from_exception",
+                        message);
+                    prepared.forEach((item, index) => failuresByIndex.set(item.index, failures[index]));
+                    resolve(buildEnvelope(
+                        ordered.map((_, index) => failuresByIndex.get(index)),
+                        [buildBatchError("convert-throw", message, "convert_from_exception")],
+                        ordered.length));
+                }
+            });
+        }
+
+        window.initializeCoordConvHost = async function(rawConfig) {
+            try {
+                const config = parseConfig(rawConfig);
+                hostState.config = config;
+
+                if (hostState.ready && window.AMap && typeof window.AMap.convertFrom === "function") {
+                    postHostMessage("coord-conv-ready", {
+                        ready: true
+                    });
+                    return JSON.stringify({
+                        type: "coord-conv-host-init",
+                        status: "ready"
+                    });
                 }
 
-                try {
-                    const items = await Promise.all(
-                        safePoints.map((point) => convertPoint(point, config?.rawCoordinateSystem || "baidu"))
-                    );
-                    return buildBatchPayload(items, []);
-                } catch (error) {
-                    const message = error && error.message
-                        ? error.message
-                        : "高德地图坐标转换失败，需人工确认。";
-                    return buildBatchPayload(
-                        safePoints.map((point) => point.hasRawCoordinate
-                            ? buildFailedPoint(point, {
-                                coordinateStateText: "高德批量转换失败",
-                                coordinateWarning: message,
-                                failureStage: "convert-batch",
-                                failureReasonCode: "convert_batch_failed"
-                            })
-                            : point),
-                        [buildBatchError("convert-batch", message)]);
-                }
+                await ensureMapScript(config);
+                hostState.ready = true;
+                hostState.readyError = "";
+                window.coordConvReady = true;
+                postHostMessage("coord-conv-ready", {
+                    ready: true
+                });
+
+                return JSON.stringify({
+                    type: "coord-conv-host-init",
+                    status: "ready"
+                });
+            } catch (error) {
+                const message = error && error.message
+                    ? error.message
+                    : "CoordConv host initialization failed.";
+                hostState.ready = false;
+                hostState.readyError = message;
+                window.coordConvReady = false;
+                postHostMessage("coord-conv-ready-failed", {
+                    ready: false,
+                    message
+                });
+
+                return JSON.stringify({
+                    type: "coord-conv-host-init",
+                    status: "failed",
+                    message
+                });
             }
         };
+
+        window.convertBd09Batch = async function(rawJson, rawConfig) {
+            let requestedCount = 0;
+
+            try {
+                const config = parseConfig(rawConfig || hostState.config || {});
+                hostState.config = config;
+                const points = parsePoints(rawJson);
+                requestedCount = points.length;
+
+                if (!hostState.ready || !window.AMap || typeof window.AMap.convertFrom !== "function") {
+                    await window.initializeCoordConvHost(config);
+                }
+
+                if (!hostState.ready || !window.AMap || typeof window.AMap.convertFrom !== "function") {
+                    return JSON.stringify(buildEnvelope(
+                        buildBatchFailure(points, "host-ready", "coord_conv_host_not_ready", hostState.readyError || "CoordConv host is not ready."),
+                        [buildBatchError("host-ready", hostState.readyError || "CoordConv host is not ready.", "coord_conv_host_not_ready")],
+                        requestedCount));
+                }
+
+                const envelope = await runBatchConversion(points, config);
+                return JSON.stringify(envelope);
+            } catch (error) {
+                const message = error && error.message
+                    ? error.message
+                    : "Unexpected coord conversion host failure.";
+                return JSON.stringify(buildEnvelope(
+                    [],
+                    [buildBatchError("convert-batch", message, "convert_batch_failed")],
+                    requestedCount));
+            }
+        };
+
+        window.addEventListener("DOMContentLoaded", () => {
+            window.coordConvReady = false;
+            postHostMessage("coord-conv-host-loaded", {
+                loaded: true
+            });
+        });
     </script>
 </body>
 </html>

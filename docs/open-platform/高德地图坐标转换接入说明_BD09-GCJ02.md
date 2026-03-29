@@ -787,3 +787,11 @@ var requestUrl =
 **后台做校验和分流，前端使用高德官方 `AMap.convertFrom(..., "baidu", ...)` 完成 BD-09 → GCJ-02 转换，再统一落图。**
 
 这是当前项目已经实际验证通过的做法，适合直接复用。
+## 17. 2026-03-29 当前实现补充
+
+- `CoordConvHost.html` 当前采用两段式调用：先 `initializeCoordConvHost(...)` 等待宿主页与高德 JS SDK ready，再由 `convertBd09Batch(...)` 执行批量转换。
+- `convertBd09Batch(...)` 是当前唯一批量入口；所有成功、部分失败、全部失败、脚本失败和异常路径都会返回单一 envelope，不再依赖只发 `postMessage` 的副通道。
+- C# 宿主当前会显式等待 `coord-conv-ready`，超时会记录 `CoordConv host ready timeout`，不会再把 `{}`、空字符串、`null` 或 `undefined` 误当成成功结果。
+- 当前 BD-09 -> GCJ-02 主链路已按高德 JS SDK 约束拆批，每批最多 40 个点，并记录 `batchIndex`、`batchDeviceCodes`、`payloadSummary` 和逐点错误信息。
+- `AMap.convertFrom` 的 `result.locations` 当前按 `string / array / object / LngLat(getLng,getLat)` 多形态兼容解析；单点失败不会拖垮整批成功点。
+- 成功转换后的坐标会写回本地 `MapLatitude / MapLongitude`，并把来源收口到现有 `CoordinateSource = "amap_js_convert_from_baidu"`，供地图页后续直接复用。
