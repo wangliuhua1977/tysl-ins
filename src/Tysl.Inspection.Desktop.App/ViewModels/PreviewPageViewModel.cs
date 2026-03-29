@@ -77,7 +77,7 @@ public sealed partial class PreviewPageViewModel(
         : "请先成功获取 RTSP 地址后再打开播放窗口。";
 
     public string AbnormalListHintText => AbnormalItems.Count > 0
-        ? $"当前异常池共 {AbnormalItems.Count} 条，已持久化到本地 SQLite；“已复核”仅表示人工已看过。"
+        ? $"当前异常池共 {AbnormalItems.Count} 条，已持久化到本地 SQLite；“已复核”仅表示人工已看过，处置状态独立记录最小收口。"
         : "当前异常池暂无异常项；巡检通过不会进入异常池。";
 
     public async Task InitializeAsync()
@@ -218,6 +218,23 @@ public sealed partial class PreviewPageViewModel(
         }
 
         var updated = abnormalStore.ToggleReviewed(item.Id);
+        if (updated is null)
+        {
+            return;
+        }
+
+        ReplaceAbnormalItem(item, updated);
+    }
+
+    [RelayCommand]
+    private void AdvanceHandleStatus(InspectAbnormalItem? item)
+    {
+        if (item is null)
+        {
+            return;
+        }
+
+        var updated = abnormalStore.AdvanceHandleStatus(item.Id);
         if (updated is null)
         {
             return;

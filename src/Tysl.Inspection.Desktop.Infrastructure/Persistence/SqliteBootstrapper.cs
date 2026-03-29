@@ -52,6 +52,9 @@ public sealed class SqliteBootstrapper(
                 failureCategory TEXT NOT NULL DEFAULT '',
                 dispositionSummary TEXT NOT NULL,
                 isReviewed INTEGER NOT NULL DEFAULT 0,
+                handleStatus INTEGER NOT NULL DEFAULT 1,
+                handleStatusText TEXT NOT NULL DEFAULT '待处理',
+                handleUpdatedAt TEXT NOT NULL DEFAULT '',
                 updatedAt TEXT NOT NULL,
                 UNIQUE(deviceCode, abnormalClass, conclusion)
             );
@@ -63,6 +66,7 @@ public sealed class SqliteBootstrapper(
         await using var command = connection.CreateCommand();
         command.CommandText = commandText;
         await command.ExecuteNonQueryAsync(cancellationToken);
+        await EnsureInspectAbnormalPoolColumnsAsync(connection, cancellationToken);
 
         logger.LogInformation("SQLite schema initialized at {DatabasePath}.", ResolveDatabasePath(databaseOptions.Value, runtimePaths));
     }
@@ -82,5 +86,92 @@ public sealed class SqliteBootstrapper(
         return Path.IsPathRooted(options.Path)
             ? options.Path
             : Path.Combine(runtimePaths.RootPath, options.Path);
+    }
+
+    private static async Task EnsureInspectAbnormalPoolColumnsAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        var columns = await LoadInspectAbnormalPoolColumnsAsync(connection, cancellationToken);
+
+        if (!columns.Contains("handleStatus"))
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                "ALTER TABLE InspectAbnormalPool ADD COLUMN handleStatus INTEGER NOT NULL DEFAULT 1;",
+                cancellationToken);
+        }
+
+        if (!columns.Contains("handleStatusText"))
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                "ALTER TABLE InspectAbnormalPool ADD COLUMN handleStatusText TEXT NOT NULL DEFAULT '待处理';",
+                cancellationToken);
+        }
+
+        if (!columns.Contains("handleUpdatedAt"))
+        {
+            await ExecuteNonQueryAsync(
+                connection,
+                "ALTER TABLE InspectAbnormalPool ADD COLUMN handleUpdatedAt TEXT NOT NULL DEFAULT '';",
+                cancellationToken);
+        }
+
+        await ExecuteNonQueryAsync(
+            connection,
+            """
+            UPDATE InspectAbnormalPool
+            SET handleStatus = CASE
+                WHEN handleStatus IN (1, 2, 3) THEN handleStatus
+                ELSE 1
+            END;
+            """,
+            cancellationToken);
+        await ExecuteNonQueryAsync(
+            connection,
+            """
+            UPDATE InspectAbnormalPool
+            SET handleStatusText = CASE handleStatus
+                WHEN 1 THEN '待处理'
+                WHEN 2 THEN '处理中'
+                WHEN 3 THEN '已处理'
+                ELSE '待处理'
+            END;
+            """,
+            cancellationToken);
+        await ExecuteNonQueryAsync(
+            connection,
+            """
+            UPDATE InspectAbnormalPool
+            SET handleUpdatedAt = CASE
+                WHEN handleUpdatedAt IS NULL OR handleUpdatedAt = '' THEN updatedAt
+                ELSE handleUpdatedAt
+            END;
+            """,
+            cancellationToken);
+    }
+
+    private static async Task<HashSet<string>> LoadInspectAbnormalPoolColumnsAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA table_info(InspectAbnormalPool);";
+
+        var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (!reader.IsDBNull(1))
+            {
+                columns.Add(reader.GetString(1));
+            }
+        }
+
+        return columns;
+    }
+
+    private static async Task ExecuteNonQueryAsync(SqliteConnection connection, string commandText, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = commandText;
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 }

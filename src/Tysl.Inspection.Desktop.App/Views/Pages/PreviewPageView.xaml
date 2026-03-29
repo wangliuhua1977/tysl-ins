@@ -312,11 +312,17 @@
                                                            Text="{Binding InspectAtText}" />
                                             </StackPanel>
 
-                                            <Button Grid.Column="1"
-                                                    Padding="14,8"
-                                                    Command="{Binding DataContext.ToggleReviewedCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                    CommandParameter="{Binding}"
-                                                    Content="{Binding ReviewActionText}" />
+                                            <StackPanel Grid.Column="1">
+                                                <Button Padding="14,8"
+                                                        Command="{Binding DataContext.AdvanceHandleStatusCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                        CommandParameter="{Binding}"
+                                                        Content="{Binding HandleActionText}" />
+                                                <Button Margin="0,8,0,0"
+                                                        Padding="14,8"
+                                                        Command="{Binding DataContext.ToggleReviewedCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                        CommandParameter="{Binding}"
+                                                        Content="{Binding ReviewActionText}" />
+                                            </StackPanel>
 
                                             <TextBlock Grid.Row="1"
                                                        Grid.ColumnSpan="2"
@@ -329,6 +335,8 @@
                                                 <Run Text="{Binding Conclusion}" />
                                                 <Run Text="    已复核：" />
                                                 <Run Text="{Binding ReviewedText}" />
+                                                <Run Text="    处置状态：" />
+                                                <Run Text="{Binding HandleStatusText}" />
                                             </TextBlock>
 
                                             <TextBlock Grid.Row="2"

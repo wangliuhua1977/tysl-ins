@@ -61,6 +61,8 @@ public interface IInspectAbnormalStore
     InspectAbnormalItem? Add(InspectResult result);
 
     InspectAbnormalItem? ToggleReviewed(Guid id);
+
+    InspectAbnormalItem? AdvanceHandleStatus(Guid id);
 }
 
 public interface IInspectAbnormalPoolStore
@@ -125,6 +127,9 @@ public sealed record InspectAbnormalItem(
     string FailureCategory,
     string SummaryText,
     bool IsReviewed,
+    InspectHandleStatus HandleStatus,
+    string HandleStatusText,
+    DateTimeOffset HandleUpdatedAt,
     DateTimeOffset UpdatedAt)
 {
     public string DeviceDisplayText => $"{DeviceName}（{DeviceCode}）";
@@ -136,6 +141,25 @@ public sealed record InspectAbnormalItem(
     public string ReviewedText => IsReviewed ? "已复核" : "未复核";
 
     public string ReviewActionText => IsReviewed ? "取消已复核" : "标记已复核";
+
+    public string HandleActionText => HandleStatus switch
+    {
+        InspectHandleStatus.Pending => "开始处理",
+        InspectHandleStatus.InProgress => "标记已处理",
+        InspectHandleStatus.Handled => "回退处理中",
+        _ => "开始处理"
+    };
+
+    public static string BuildHandleStatusText(InspectHandleStatus handleStatus)
+    {
+        return handleStatus switch
+        {
+            InspectHandleStatus.Pending => "待处理",
+            InspectHandleStatus.InProgress => "处理中",
+            InspectHandleStatus.Handled => "已处理",
+            _ => "待处理"
+        };
+    }
 }
 
 public enum InspectAbnormalClass
@@ -144,6 +168,13 @@ public enum InspectAbnormalClass
     Offline = 1,
     RtspNotReady = 2,
     PlayFailed = 3
+}
+
+public enum InspectHandleStatus
+{
+    Pending = 1,
+    InProgress = 2,
+    Handled = 3
 }
 
 public sealed record InspectResult(

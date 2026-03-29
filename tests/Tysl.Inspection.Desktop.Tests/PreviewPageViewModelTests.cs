@@ -104,7 +104,7 @@ public sealed class PreviewPageViewModelTests
     }
 
     [Fact]
-    public async Task RequestInspectAsync_AddsAbnormalPoolItem_AndAllowsReviewedToggle()
+    public async Task RequestInspectAsync_AddsAbnormalPoolItem_AndAllowsMinimalHandlingActions()
     {
         var previewService = new StubPreviewService
         {
@@ -135,7 +135,14 @@ public sealed class PreviewPageViewModelTests
         var item = Assert.Single(viewModel.AbnormalItems);
         Assert.Equal("播放失败", item.AbnormalClassText);
         Assert.Equal("未复核", item.ReviewedText);
+        Assert.Equal("待处理", item.HandleStatusText);
         Assert.Contains("当前异常池共 1 条", viewModel.AbnormalListHintText);
+
+        viewModel.AdvanceHandleStatusCommand.Execute(item);
+
+        var handling = Assert.Single(viewModel.AbnormalItems);
+        Assert.Equal(InspectHandleStatus.InProgress, handling.HandleStatus);
+        Assert.Equal("处理中", handling.HandleStatusText);
 
         viewModel.ToggleReviewedCommand.Execute(item);
 

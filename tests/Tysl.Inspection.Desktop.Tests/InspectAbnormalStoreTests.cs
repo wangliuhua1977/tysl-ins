@@ -39,6 +39,9 @@ public sealed class InspectAbnormalStoreTests
         Assert.Equal(conclusion, saved.Conclusion);
         Assert.Equal(failureCategory, saved.FailureCategory);
         Assert.False(saved.IsReviewed);
+        Assert.Equal(InspectHandleStatus.Pending, saved.HandleStatus);
+        Assert.Equal("待处理", saved.HandleStatusText);
+        Assert.Equal(DateTimeOffset.Parse("2026-03-29T10:00:00+08:00"), saved.HandleUpdatedAt);
     }
 
     [Fact]
@@ -123,10 +126,14 @@ public sealed class InspectAbnormalStoreTests
         Assert.NotNull(reviewed);
         Assert.True(reviewed.IsReviewed);
         Assert.Equal("已复核", reviewed.ReviewedText);
+        Assert.Equal(InspectHandleStatus.Pending, reviewed.HandleStatus);
+        Assert.Equal("待处理", reviewed.HandleStatusText);
 
         var restored = Assert.Single(context.CreateStore().GetItems());
         Assert.True(restored.IsReviewed);
         Assert.Equal("已复核", restored.ReviewedText);
+        Assert.Equal(InspectHandleStatus.Pending, restored.HandleStatus);
+        Assert.Equal("待处理", restored.HandleStatusText);
     }
 
     [Fact]
@@ -158,6 +165,42 @@ public sealed class InspectAbnormalStoreTests
         Assert.Equal(2, restored.Count);
         Assert.Equal("dev-002", restored[0].DeviceCode);
         Assert.Equal("dev-001", restored[1].DeviceCode);
+        Assert.All(restored, item => Assert.Equal(InspectHandleStatus.Pending, item.HandleStatus));
+    }
+
+    [Fact]
+    public void AdvanceHandleStatus_PersistsMinimalTransitionSequence()
+    {
+        using var context = new SqliteAbnormalStoreTestContext();
+        var store = context.CreateStore();
+        var item = store.Add(BuildResult(
+            InspectAbnormalClass.PlayFailed,
+            "巡检失败：播放建链失败",
+            "播放建链失败",
+            "播放器未能完成播放建链。",
+            DateTimeOffset.Parse("2026-03-29T10:00:00+08:00")));
+
+        var processing = store.AdvanceHandleStatus(item!.Id);
+        var handled = store.AdvanceHandleStatus(item.Id);
+        var rolledBack = store.AdvanceHandleStatus(item.Id);
+
+        Assert.NotNull(processing);
+        Assert.Equal(InspectHandleStatus.InProgress, processing!.HandleStatus);
+        Assert.Equal("处理中", processing.HandleStatusText);
+
+        Assert.NotNull(handled);
+        Assert.Equal(InspectHandleStatus.Handled, handled!.HandleStatus);
+        Assert.Equal("已处理", handled.HandleStatusText);
+
+        Assert.NotNull(rolledBack);
+        Assert.Equal(InspectHandleStatus.InProgress, rolledBack!.HandleStatus);
+        Assert.Equal("处理中", rolledBack.HandleStatusText);
+        Assert.True(rolledBack.HandleUpdatedAt >= item.InspectAt);
+
+        var restored = Assert.Single(context.CreateStore().GetItems());
+        Assert.Equal(InspectHandleStatus.InProgress, restored.HandleStatus);
+        Assert.Equal("处理中", restored.HandleStatusText);
+        Assert.True(restored.HandleUpdatedAt >= item.InspectAt);
     }
 
     [Fact]

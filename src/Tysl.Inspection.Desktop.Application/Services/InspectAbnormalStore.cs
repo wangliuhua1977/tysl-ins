@@ -65,11 +65,18 @@ public sealed class InspectAbnormalStore(
             result.FailureCategory,
             result.BuildDispositionSummary(),
             false,
+            InspectHandleStatus.Pending,
+            InspectAbnormalItem.BuildHandleStatusText(InspectHandleStatus.Pending),
+            result.InspectAt,
             result.InspectAt);
 
         TryPersist(item);
         items.Insert(0, item);
 
+        logger.LogInformation(
+            "Inspect abnormal handle status initialized for {DeviceCode}. HandleStatus={HandleStatus}.",
+            item.DeviceCode,
+            item.HandleStatusText);
         logger.LogInformation(
             "Inspect abnormal written to abnormal pool for {DeviceCode}. AbnormalClass={AbnormalClass}.",
             item.DeviceCode,
@@ -105,6 +112,37 @@ public sealed class InspectAbnormalStore(
         return updated;
     }
 
+    public InspectAbnormalItem? AdvanceHandleStatus(Guid id)
+    {
+        EnsureLoaded();
+
+        var index = items.FindIndex(item => item.Id == id);
+        if (index < 0)
+        {
+            return null;
+        }
+
+        var nextStatus = GetNextHandleStatus(items[index].HandleStatus);
+        var updatedAt = DateTimeOffset.Now;
+        var updated = items[index] with
+        {
+            HandleStatus = nextStatus,
+            HandleStatusText = InspectAbnormalItem.BuildHandleStatusText(nextStatus),
+            HandleUpdatedAt = updatedAt,
+            UpdatedAt = updatedAt
+        };
+
+        TryPersist(updated);
+        items[index] = updated;
+
+        logger.LogInformation(
+            "Inspect abnormal handle status persisted for {DeviceCode}. HandleStatus={HandleStatus}.",
+            updated.DeviceCode,
+            updated.HandleStatusText);
+
+        return updated;
+    }
+
     private static bool CanAdd(InspectResult result)
     {
         return result.AbnormalClass is InspectAbnormalClass.Offline
@@ -124,7 +162,16 @@ public sealed class InspectAbnormalStore(
         try
         {
             items.Clear();
-            items.AddRange(abnormalPoolStore.LoadItems());
+            var loadedItems = abnormalPoolStore.LoadItems();
+            items.AddRange(loadedItems);
+
+            foreach (var item in loadedItems)
+            {
+                logger.LogInformation(
+                    "Inspect abnormal handle status restored for {DeviceCode}. HandleStatus={HandleStatus}.",
+                    item.DeviceCode,
+                    item.HandleStatusText);
+            }
 
             logger.LogInformation(
                 "Inspect abnormal pool restored from SQLite. Count={Count}.",
@@ -158,5 +205,16 @@ public sealed class InspectAbnormalStore(
             string.Equals(item.DeviceCode, deviceCode, StringComparison.OrdinalIgnoreCase)
             && item.AbnormalClass == abnormalClass
             && string.Equals(item.Conclusion, conclusion, StringComparison.Ordinal));
+    }
+
+    private static InspectHandleStatus GetNextHandleStatus(InspectHandleStatus currentStatus)
+    {
+        return currentStatus switch
+        {
+            InspectHandleStatus.Pending => InspectHandleStatus.InProgress,
+            InspectHandleStatus.InProgress => InspectHandleStatus.Handled,
+            InspectHandleStatus.Handled => InspectHandleStatus.InProgress,
+            _ => InspectHandleStatus.Pending
+        };
     }
 }

@@ -28,6 +28,9 @@ public sealed class SqliteInspectAbnormalPoolStore(
                 failureCategory,
                 dispositionSummary,
                 isReviewed,
+                handleStatus,
+                handleStatusText,
+                handleUpdatedAt,
                 updatedAt
             FROM InspectAbnormalPool
             ORDER BY inspectAt DESC, updatedAt DESC, deviceCode COLLATE NOCASE;
@@ -37,9 +40,12 @@ public sealed class SqliteInspectAbnormalPoolStore(
         var items = new List<InspectAbnormalItem>();
         while (reader.Read())
         {
+            var inspectAt = ReadDateTimeOffset(reader, 3);
+            var handleStatus = ReadHandleStatus(reader, 10);
+            var updatedAt = ReadDateTimeOffset(reader, 13);
             items.Add(new InspectAbnormalItem(
                 ReadGuid(reader, 0),
-                ReadDateTimeOffset(reader, 3),
+                inspectAt,
                 ReadString(reader, 2),
                 ReadString(reader, 1),
                 ReadAbnormalClass(reader, 4),
@@ -48,7 +54,10 @@ public sealed class SqliteInspectAbnormalPoolStore(
                 ReadString(reader, 7),
                 ReadString(reader, 8),
                 ReadBoolean(reader, 9),
-                ReadDateTimeOffset(reader, 10)));
+                handleStatus,
+                ReadHandleStatusText(reader, 11, handleStatus),
+                ReadDateTimeOffset(reader, 12, updatedAt),
+                updatedAt));
         }
 
         return items;
@@ -72,6 +81,9 @@ public sealed class SqliteInspectAbnormalPoolStore(
                 failureCategory,
                 dispositionSummary,
                 isReviewed,
+                handleStatus,
+                handleStatusText,
+                handleUpdatedAt,
                 updatedAt)
             VALUES(
                 @id,
@@ -84,6 +96,9 @@ public sealed class SqliteInspectAbnormalPoolStore(
                 @failureCategory,
                 @dispositionSummary,
                 @isReviewed,
+                @handleStatus,
+                @handleStatusText,
+                @handleUpdatedAt,
                 @updatedAt)
             ON CONFLICT(deviceCode, abnormalClass, conclusion) DO UPDATE SET
                 deviceName = excluded.deviceName,
@@ -92,6 +107,9 @@ public sealed class SqliteInspectAbnormalPoolStore(
                 failureCategory = excluded.failureCategory,
                 dispositionSummary = excluded.dispositionSummary,
                 isReviewed = excluded.isReviewed,
+                handleStatus = excluded.handleStatus,
+                handleStatusText = excluded.handleStatusText,
+                handleUpdatedAt = excluded.handleUpdatedAt,
                 updatedAt = excluded.updatedAt;
             """;
         command.Parameters.AddWithValue("@id", item.Id.ToString("D"));
@@ -104,6 +122,9 @@ public sealed class SqliteInspectAbnormalPoolStore(
         command.Parameters.AddWithValue("@failureCategory", item.FailureCategory);
         command.Parameters.AddWithValue("@dispositionSummary", item.SummaryText);
         command.Parameters.AddWithValue("@isReviewed", item.IsReviewed ? 1 : 0);
+        command.Parameters.AddWithValue("@handleStatus", (int)item.HandleStatus);
+        command.Parameters.AddWithValue("@handleStatusText", item.HandleStatusText);
+        command.Parameters.AddWithValue("@handleUpdatedAt", item.HandleUpdatedAt.ToString("O", CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("@updatedAt", item.UpdatedAt.ToString("O", CultureInfo.InvariantCulture));
         command.ExecuteNonQuery();
     }
@@ -144,15 +165,20 @@ public sealed class SqliteInspectAbnormalPoolStore(
 
     private static DateTimeOffset ReadDateTimeOffset(SqliteDataReader reader, int ordinal)
     {
+        return ReadDateTimeOffset(reader, ordinal, DateTimeOffset.MinValue);
+    }
+
+    private static DateTimeOffset ReadDateTimeOffset(SqliteDataReader reader, int ordinal, DateTimeOffset fallbackValue)
+    {
         if (reader.IsDBNull(ordinal))
         {
-            return DateTimeOffset.MinValue;
+            return fallbackValue;
         }
 
         var text = reader.GetString(ordinal);
         return DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var value)
             ? value
-            : DateTimeOffset.MinValue;
+            : fallbackValue;
     }
 
     private static InspectAbnormalClass ReadAbnormalClass(SqliteDataReader reader, int ordinal)
@@ -174,5 +200,33 @@ public sealed class SqliteInspectAbnormalPoolStore(
         return Enum.IsDefined(typeof(InspectAbnormalClass), raw)
             ? (InspectAbnormalClass)raw
             : InspectAbnormalClass.None;
+    }
+
+    private static InspectHandleStatus ReadHandleStatus(SqliteDataReader reader, int ordinal)
+    {
+        if (reader.IsDBNull(ordinal))
+        {
+            return InspectHandleStatus.Pending;
+        }
+
+        var value = reader.GetValue(ordinal);
+        var raw = value switch
+        {
+            long longValue => Convert.ToInt32(longValue, CultureInfo.InvariantCulture),
+            int intValue => intValue,
+            _ when int.TryParse(value.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) => parsed,
+            _ => (int)InspectHandleStatus.Pending
+        };
+
+        return Enum.IsDefined(typeof(InspectHandleStatus), raw)
+            ? (InspectHandleStatus)raw
+            : InspectHandleStatus.Pending;
+    }
+
+    private static string ReadHandleStatusText(SqliteDataReader reader, int ordinal, InspectHandleStatus handleStatus)
+    {
+        var storedText = ReadString(reader, ordinal);
+        var normalizedText = InspectAbnormalItem.BuildHandleStatusText(handleStatus);
+        return string.IsNullOrWhiteSpace(storedText) ? normalizedText : storedText;
     }
 }
