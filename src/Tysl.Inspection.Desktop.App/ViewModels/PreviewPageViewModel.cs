@@ -15,6 +15,8 @@ public sealed partial class PreviewPageViewModel(
     ILogger<PreviewPageViewModel> logger) : ObservableObject
 {
     private bool hasLoaded;
+    private IReadOnlyDictionary<string, InspectionDevice> deviceDetailsByCode = new Dictionary<string, InspectionDevice>(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyDictionary<string, PreviewDirectoryGroupItem> directoryGroupById = new Dictionary<string, PreviewDirectoryGroupItem>(StringComparer.OrdinalIgnoreCase);
 
     public ObservableCollection<PreviewDeviceOption> Devices { get; } = [];
 
@@ -75,6 +77,27 @@ public sealed partial class PreviewPageViewModel(
 
     [ObservableProperty]
     private string deviceCode = "暂无";
+
+    [ObservableProperty]
+    private string selectedDeviceDirectoryPathText = "暂无";
+
+    [ObservableProperty]
+    private string selectedDeviceOnlineStatusText = "暂无";
+
+    [ObservableProperty]
+    private string selectedDeviceLatitudeText = "未定位";
+
+    [ObservableProperty]
+    private string selectedDeviceLongitudeText = "未定位";
+
+    [ObservableProperty]
+    private string selectedDeviceLocationText = "暂无";
+
+    [ObservableProperty]
+    private string selectedDeviceRecentInspectText = "暂无最近巡检记录";
+
+    [ObservableProperty]
+    private string selectedDeviceAbnormalPoolText = "异常池暂无该点位记录";
 
     [ObservableProperty]
     private string diagnosisText = "尚未发起诊断";
@@ -177,6 +200,8 @@ public sealed partial class PreviewPageViewModel(
 
         var currentCode = SelectedDevice?.DeviceCode;
         var result = await previewService.LoadLocalDevicesAsync(CancellationToken.None);
+        deviceDetailsByCode = result.DeviceDetailsByCode;
+        directoryGroupById = result.DirectoryGroups.ToDictionary(group => group.GroupId, StringComparer.OrdinalIgnoreCase);
 
         Devices.Clear();
         DirectoryGroups.Clear();
@@ -249,6 +274,8 @@ public sealed partial class PreviewPageViewModel(
         {
             ApplyDevice(SelectedDevice);
         }
+
+        RefreshSelectedDeviceDetailSummary();
     }
 
     [RelayCommand(CanExecute = nameof(CanRequestPreview))]
@@ -472,6 +499,7 @@ public sealed partial class PreviewPageViewModel(
         OpenPlayWinCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(IsPlayWindowReady));
         OnPropertyChanged(nameof(PlayWindowHintText));
+        RefreshSelectedDeviceDetailSummary();
     }
 
     partial void OnIsBusyChanged(bool value)
@@ -543,6 +571,7 @@ public sealed partial class PreviewPageViewModel(
             "Inspect disposition summary generation completed for {DeviceCode}. SummaryLength={SummaryLength}.",
             result.DeviceCode,
             InspectSummaryText.Length);
+        RefreshSelectedDeviceDetailSummary();
     }
 
     private void AddAbnormalItem(InspectResult result)
@@ -561,6 +590,7 @@ public sealed partial class PreviewPageViewModel(
 
         AbnormalItems.Insert(0, item);
         OnPropertyChanged(nameof(AbnormalListHintText));
+        RefreshSelectedDeviceDetailSummary();
     }
 
     private void ResetInspectResult()
@@ -584,6 +614,7 @@ public sealed partial class PreviewPageViewModel(
         }
 
         OnPropertyChanged(nameof(AbnormalListHintText));
+        RefreshSelectedDeviceDetailSummary();
     }
 
     private void ReplaceAbnormalItem(InspectAbnormalItem current, InspectAbnormalItem updated)
@@ -600,11 +631,127 @@ public sealed partial class PreviewPageViewModel(
         }
 
         OnPropertyChanged(nameof(AbnormalListHintText));
+        RefreshSelectedDeviceDetailSummary();
     }
 
     private void SelectDeviceByCode(string deviceCode)
     {
         SelectedDevice = Devices.FirstOrDefault(device => string.Equals(device.DeviceCode, deviceCode, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void RefreshSelectedDeviceDetailSummary()
+    {
+        if (SelectedDevice is null)
+        {
+            ResetSelectedDeviceDetailSummary();
+            return;
+        }
+
+        var detail = GetSelectedDeviceDetail();
+        SelectedDeviceDirectoryPathText = BuildDirectoryPathText(detail);
+        SelectedDeviceOnlineStatusText = BuildOnlineStatusText(detail?.OnlineStatus ?? SelectedDevice.OnlineStatus);
+        SelectedDeviceLatitudeText = detail?.Latitude ?? "未定位";
+        SelectedDeviceLongitudeText = detail?.Longitude ?? "未定位";
+        SelectedDeviceLocationText = string.IsNullOrWhiteSpace(detail?.Location) ? "暂无" : detail.Location!;
+        SelectedDeviceRecentInspectText = BuildRecentInspectText();
+        SelectedDeviceAbnormalPoolText = BuildAbnormalPoolText();
+    }
+
+    private void ResetSelectedDeviceDetailSummary()
+    {
+        SelectedDeviceDirectoryPathText = "暂无";
+        SelectedDeviceOnlineStatusText = "暂无";
+        SelectedDeviceLatitudeText = "未定位";
+        SelectedDeviceLongitudeText = "未定位";
+        SelectedDeviceLocationText = "暂无";
+        SelectedDeviceRecentInspectText = "暂无最近巡检记录";
+        SelectedDeviceAbnormalPoolText = "异常池暂无该点位记录";
+    }
+
+    private InspectionDevice? GetSelectedDeviceDetail()
+    {
+        return SelectedDevice is not null && deviceDetailsByCode.TryGetValue(SelectedDevice.DeviceCode, out var detail)
+            ? detail
+            : null;
+    }
+
+    private string BuildDirectoryPathText(InspectionDevice? detail)
+    {
+        if (detail is null || string.IsNullOrWhiteSpace(detail.GroupId))
+        {
+            return "暂无";
+        }
+
+        var segments = new List<string>();
+        var currentGroupId = detail.GroupId;
+        var guard = 0;
+        while (!string.IsNullOrWhiteSpace(currentGroupId) && directoryGroupById.TryGetValue(currentGroupId, out var group))
+        {
+            segments.Add(group.GroupName);
+            currentGroupId = group.ParentGroupId;
+            guard++;
+            if (guard > 32)
+            {
+                break;
+            }
+        }
+
+        segments.Reverse();
+        return segments.Count > 0
+            ? string.Join(" / ", segments)
+            : "暂无";
+    }
+
+    private string BuildRecentInspectText()
+    {
+        if (SelectedDevice is null)
+        {
+            return "暂无最近巡检记录";
+        }
+
+        if (string.Equals(DeviceCode, SelectedDevice.DeviceCode, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(InspectAtText, "暂无", StringComparison.Ordinal))
+        {
+            return $"{InspectAtText} | {InspectConclusion} | {InspectFailureCategory}";
+        }
+
+        var latest = AbnormalItems
+            .Where(item => string.Equals(item.DeviceCode, SelectedDevice.DeviceCode, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(item => item.InspectAt)
+            .FirstOrDefault();
+
+        return latest is null
+            ? "暂无最近巡检记录"
+            : $"{latest.InspectAtText} | {latest.Conclusion} | {latest.FailureCategory}";
+    }
+
+    private string BuildAbnormalPoolText()
+    {
+        if (SelectedDevice is null)
+        {
+            return "异常池暂无该点位记录";
+        }
+
+        var latest = AbnormalItems
+            .Where(item => string.Equals(item.DeviceCode, SelectedDevice.DeviceCode, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(item => item.InspectAt)
+            .FirstOrDefault();
+
+        return latest is null
+            ? "异常池暂无该点位记录"
+            : $"{latest.HandleStatusText} | {latest.AbnormalClassText} | {latest.SummaryText}";
+    }
+
+    private static string BuildOnlineStatusText(int? onlineStatus)
+    {
+        return onlineStatus switch
+        {
+            1 => "在线",
+            0 => "离线",
+            2 => "休眠（普通）",
+            3 => "休眠（保活/AOV）",
+            _ => "未知"
+        };
     }
 
     private void ApplyDirectorySummary(PreviewDeviceLoadResult result)

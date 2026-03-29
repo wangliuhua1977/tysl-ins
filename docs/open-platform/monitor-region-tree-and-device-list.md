@@ -147,7 +147,7 @@ dotnet run --project src/Tysl.Inspection.Desktop.App -- --sync-once
 得到的真实结果样例为：
 
 ```text
-SYNC SUMMARY directories=10 devices=19 success=10 failure=0 snapshotReplaced=True platformDirectories=10 platformDevices=19 reconcileCompleted=True reconcileMatched=False reconcileScope=首层 regionCode：94943605-3, 94943605-5, 94943605-2, 94943605-6, 94943605-1；差异：交通要道(94943605-4) 缺少平台对账记录 | 我的设备(94943605-6) 本地7/平台5
+SYNC SUMMARY directories=10 devices=19 success=10 failure=0 snapshotReplaced=True platformDirectories=10 platformDevices=19 reconcileCompleted=True reconcileMatched=False reconcileScope=首层 regionCode：94943605-3, 94943605-5, 94943605-2, 94943605-6, 94943605-1；差异已解释：交通要道(94943605-4) 平台未返回该 regionCode 对账记录 | 我的设备(94943605-6) 本地 7 / 平台 5，可能存在双目子通道或子通道口径差异，需人工确认
 ```
 
 该样例说明：

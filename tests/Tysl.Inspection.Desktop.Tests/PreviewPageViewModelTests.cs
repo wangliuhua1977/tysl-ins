@@ -35,6 +35,79 @@ public sealed class PreviewPageViewModelTests
     }
 
     [Fact]
+    public async Task InitializeAsync_ShowsMinimalSelectedDeviceDetails_AndRefreshesAfterInspect()
+    {
+        var previewService = new StubPreviewService
+        {
+            LoadResult = new PreviewDeviceLoadResult(
+                true,
+                string.Empty,
+                [new PreviewDeviceOption("dev-001", "娴嬭瘯璁惧", 1)],
+                [new PreviewDirectoryGroupItem(
+                    "group-001",
+                    "榛樿鐩綍",
+                    null,
+                    string.Empty,
+                    1,
+                    1,
+                    false,
+                    [new PreviewDirectoryDeviceItem("dev-001", "娴嬭瘯璁惧", 1)])],
+                1,
+                1,
+                new GroupSyncSnapshotMetadata(1, 1, true, true, 1, 1, 1, "棣栧眰 regionCode锛歊-001"),
+                DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"))
+            {
+                DeviceDetailsByCode = new Dictionary<string, InspectionDevice>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["dev-001"] = new InspectionDevice(
+                        "dev-001",
+                        "娴嬭瘯璁惧",
+                        "group-001",
+                        "31.2304",
+                        "121.4737",
+                        "涓婃捣",
+                        1,
+                        1,
+                        1,
+                        0,
+                        DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"))
+                }
+            },
+            InspectResult = new InspectResult(
+                DateTimeOffset.Parse("2026-03-28T10:05:00+08:00"),
+                "娴嬭瘯璁惧",
+                "dev-001",
+                true,
+                "鍦ㄧ嚎",
+                true,
+                true,
+                false,
+                "宸℃澶辫触锛氭挱鏀惧け璐?",
+                "鎾斁寤洪摼澶辫触",
+                "鎾斁鍣ㄦ湭鑳藉畬鎴愭挱鏀惧缓閾俱€?",
+                InspectAbnormalClass.PlayFailed)
+        };
+        var viewModel = new PreviewPageViewModel(
+            previewService,
+            CreateStore(),
+            new StubPlayWinSvc(),
+            NullLogger<PreviewPageViewModel>.Instance);
+
+        await viewModel.InitializeAsync();
+
+        Assert.Equal("榛樿鐩綍", viewModel.SelectedDeviceDirectoryPathText);
+        Assert.Equal("在线", viewModel.SelectedDeviceOnlineStatusText);
+        Assert.Equal("31.2304", viewModel.SelectedDeviceLatitudeText);
+        Assert.Equal("121.4737", viewModel.SelectedDeviceLongitudeText);
+        Assert.Equal("涓婃捣", viewModel.SelectedDeviceLocationText);
+
+        await viewModel.RequestInspectCommand.ExecuteAsync(null);
+
+        Assert.Contains("宸℃澶辫触", viewModel.SelectedDeviceRecentInspectText);
+        Assert.Contains("鎾斁寤洪摼澶辫触", viewModel.SelectedDeviceAbnormalPoolText);
+    }
+
+    [Fact]
     public async Task InitializeAsync_ShowsMismatchHint_WhenDirectoryBindingDoesNotMatchSnapshot()
     {
         var previewService = new StubPreviewService

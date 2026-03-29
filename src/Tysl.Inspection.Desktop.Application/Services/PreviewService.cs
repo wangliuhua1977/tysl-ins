@@ -18,6 +18,7 @@ public sealed class PreviewService(
             var groups = await groupSyncStore.GetGroupsAsync(cancellationToken);
             var devices = await groupSyncStore.GetDevicesAsync(cancellationToken);
             var snapshot = await groupSyncStore.GetLocalSyncSnapshotAsync(cancellationToken);
+            var deviceDetailsByCode = devices.ToDictionary(device => device.DeviceCode, StringComparer.OrdinalIgnoreCase);
             var devicesByGroup = devices.ToLookup(device => device.GroupId, StringComparer.OrdinalIgnoreCase);
             var groupNameById = groups.ToDictionary(group => group.GroupId, group => group.GroupName, StringComparer.OrdinalIgnoreCase);
             var orderedGroups = OrderGroupsForDisplay(groups);
@@ -90,7 +91,10 @@ public sealed class PreviewService(
                 snapshot.GroupCount,
                 snapshot.DeviceCount,
                 snapshot.Metadata,
-                snapshot.LastSyncedAt);
+                snapshot.LastSyncedAt)
+            {
+                DeviceDetailsByCode = deviceDetailsByCode
+            };
         }
         catch (Exception exception)
         {

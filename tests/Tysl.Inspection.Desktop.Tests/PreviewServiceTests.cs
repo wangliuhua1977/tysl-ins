@@ -30,6 +30,11 @@ public sealed class PreviewServiceTests
         Assert.Equal(1, result.SnapshotDeviceCount);
         Assert.Equal(1, result.Metadata.PlatformGroupCount);
         Assert.Equal(1, result.Metadata.PlatformDeviceCount);
+        Assert.Single(result.DeviceDetailsByCode);
+        Assert.True(result.DeviceDetailsByCode.TryGetValue("dev-001", out var deviceDetail));
+        Assert.Equal("31.2304", deviceDetail.Latitude);
+        Assert.Equal("121.4737", deviceDetail.Longitude);
+        Assert.Equal("上海", deviceDetail.Location);
         Assert.True(result.Metadata.ReconciliationCompleted);
         Assert.True(result.Metadata.ReconciliationMatched);
         Assert.Equal(DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"), result.LastSyncedAt);

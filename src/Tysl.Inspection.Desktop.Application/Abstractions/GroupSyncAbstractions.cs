@@ -166,7 +166,11 @@ public sealed record PreviewDeviceLoadResult(
     int SnapshotGroupCount,
     int SnapshotDeviceCount,
     GroupSyncSnapshotMetadata Metadata,
-    DateTimeOffset? LastSyncedAt);
+    DateTimeOffset? LastSyncedAt)
+{
+    public IReadOnlyDictionary<string, InspectionDevice> DeviceDetailsByCode { get; init; }
+        = new Dictionary<string, InspectionDevice>(StringComparer.OrdinalIgnoreCase);
+}
 
 public sealed record PreviewPrepareResult(
     bool Success,

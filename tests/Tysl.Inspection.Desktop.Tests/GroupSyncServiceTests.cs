@@ -152,6 +152,54 @@ public sealed class GroupSyncServiceTests
     }
 
     [Fact]
+    public async Task SyncAsync_ExplainsFirstLevelReconciliationDifferences()
+    {
+        var client = new StubOpenPlatformClient
+        {
+            RootRegionResult = SuccessResult(
+            [
+                new OpenPlatformRegionDto("r1", "R-001", 0, 1, "交通要道", 1, "GB-001"),
+                new OpenPlatformRegionDto("r2", "R-002", 0, 1, "我的设备", 1, "GB-002")
+            ]),
+            RegionDevicePages =
+            {
+                [BuildPageKey("r1", 1)] = SuccessPage(
+                [
+                    new OpenPlatformRegionDeviceDto("d1", "设备1"),
+                    new OpenPlatformRegionDeviceDto("d2", "设备2"),
+                    new OpenPlatformRegionDeviceDto("d3", "设备3"),
+                    new OpenPlatformRegionDeviceDto("d4", "设备4"),
+                    new OpenPlatformRegionDeviceDto("d5", "设备5"),
+                    new OpenPlatformRegionDeviceDto("d6", "设备6"),
+                    new OpenPlatformRegionDeviceDto("d7", "设备7")
+                ], 1, 50, 7),
+                [BuildPageKey("r2", 1)] = SuccessPage([], 1, 50, 0)
+            },
+            RegionDeviceCountResult = new OpenPlatformCallResult<IReadOnlyList<OpenPlatformRegionDeviceCountDto>>
+            {
+                Success = true,
+                EndpointName = "getCusDeviceCount",
+                Payload =
+                [
+                    new OpenPlatformRegionDeviceCountDto("R-001", 5, 4)
+                ]
+            }
+        };
+        var store = new InMemoryGroupSyncStore();
+        var service = new GroupSyncService(client, store, NullLogger<GroupSyncService>.Instance);
+
+        var summary = await service.SyncAsync(CancellationToken.None);
+
+        Assert.True(summary.SnapshotReplaced);
+        Assert.True(summary.Metadata.ReconciliationCompleted);
+        Assert.False(summary.Metadata.ReconciliationMatched);
+        Assert.Contains("差异已解释", summary.Metadata.ReconciliationScopeText);
+        Assert.Contains("平台未返回该 regionCode 对账记录", summary.Metadata.ReconciliationScopeText);
+        Assert.Contains("双目子通道", summary.Metadata.ReconciliationScopeText);
+        Assert.Contains("本地 7 / 平台 5", summary.Metadata.ReconciliationScopeText);
+    }
+
+    [Fact]
     public async Task SyncAsync_UsesReturnedDeviceList_WhenPlatformTotalCountIsLowerThanReturnedItems()
     {
         var client = new StubOpenPlatformClient

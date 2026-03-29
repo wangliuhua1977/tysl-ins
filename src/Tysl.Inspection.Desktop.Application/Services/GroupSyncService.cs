@@ -373,66 +373,27 @@ public sealed class GroupSyncService(
         var platformCountByRegionCode = platformCounts
             .Where(item => !string.IsNullOrWhiteSpace(item.RegionCode))
             .ToDictionary(item => item.RegionCode, StringComparer.OrdinalIgnoreCase);
+        var platformDeviceTotal = platformCounts.Sum(item => Math.Max(item.DeviceCount ?? 0, 0));
 
-        var mismatches = new List<string>();
-        foreach (var rootGroup in rootGroups)
-        {
-            if (string.IsNullOrWhiteSpace(rootGroup.RegionCode))
-            {
-                mismatches.Add($"{rootGroup.GroupName} 缺少 regionCode，无法对账");
-                continue;
-            }
+        logger.LogInformation(
+            $"getCusDeviceCount reconciliation started. RootRegionCount={rootGroups.Length}, LocalDeviceCount={devices.Count}, PlatformRegionCount={platformCounts.Length}, PlatformDeviceCount={platformDeviceTotal}.");
 
-            if (!platformCountByRegionCode.TryGetValue(rootGroup.RegionCode, out var platformCount))
-            {
-                mismatches.Add($"{rootGroup.GroupName}({rootGroup.RegionCode}) 缺少平台对账记录");
-                continue;
-            }
+        var reconciliationDetails = BuildReconciliationDetails(rootGroups, platformCounts, subtreeCounts);
 
-            var localCount = subtreeCounts.TryGetValue(rootGroup.GroupId, out var count)
-                ? count
-                : 0;
-            var expectedCount = Math.Max(platformCount.DeviceCount ?? 0, 0);
-            if (localCount != expectedCount)
-            {
-                mismatches.Add($"{rootGroup.GroupName}({rootGroup.RegionCode}) 本地{localCount}/平台{expectedCount}");
-            }
-        }
-
-        foreach (var platformCount in platformCounts)
-        {
-            if (string.IsNullOrWhiteSpace(platformCount.RegionCode))
-            {
-                continue;
-            }
-
-            var exists = rootGroups.Any(group => string.Equals(group.RegionCode, platformCount.RegionCode, StringComparison.OrdinalIgnoreCase));
-            if (!exists)
-            {
-                mismatches.Add($"平台返回额外首层 regionCode {platformCount.RegionCode}");
-            }
-        }
-
-        var reconciledDeviceCount = platformCounts.Sum(item => Math.Max(item.DeviceCount ?? 0, 0));
+        var reconciledDeviceCount = platformDeviceTotal;
         var reconciledOnlineCount = platformCounts.Sum(item => Math.Max(item.OnlineCount ?? 0, 0));
         var scopeText = platformCounts.Length == 0
             ? "首层 regionCode 返回空列表"
             : $"首层 regionCode：{string.Join(", ", platformCounts.Select(item => string.IsNullOrWhiteSpace(item.RegionCode) ? "(空)" : item.RegionCode))}";
-        var matched = mismatches.Count == 0;
+        var matched = reconciliationDetails.Count == 0;
 
         logger.LogInformation(
-            "getCusDeviceCount reconciliation completed. RegionCount={RegionCount}, DeviceCount={DeviceCount}, OnlineCount={OnlineCount}, Matched={Matched}, Scope={Scope}.",
-            platformCounts.Length,
-            reconciledDeviceCount,
-            reconciledOnlineCount,
-            matched,
-            scopeText);
+            $"getCusDeviceCount reconciliation completed. RegionCount={platformCounts.Length}, DeviceCount={reconciledDeviceCount}, OnlineCount={reconciledOnlineCount}, Matched={matched}, Scope={scopeText}.");
 
         if (!matched)
         {
             logger.LogWarning(
-                "getCusDeviceCount reconciliation mismatch detected. Details={Details}.",
-                string.Join(" | ", mismatches));
+                $"getCusDeviceCount reconciliation mismatch detected. Details={string.Join(" | ", reconciliationDetails)}.");
         }
 
         return new GroupSyncSnapshotMetadata(
@@ -445,7 +406,66 @@ public sealed class GroupSyncService(
             reconciledOnlineCount,
             matched
                 ? scopeText
-                : $"{scopeText}；差异：{string.Join(" | ", mismatches)}");
+                : $"{scopeText}；差异已解释：{string.Join(" | ", reconciliationDetails)}");
+    }
+
+    private static IReadOnlyList<string> BuildReconciliationDetails(
+        IReadOnlyList<InspectionGroup> rootGroups,
+        IReadOnlyList<OpenPlatformRegionDeviceCountDto> platformCounts,
+        IReadOnlyDictionary<string, int> subtreeCounts)
+    {
+        var details = new List<string>();
+        var platformCountByRegionCode = platformCounts
+            .Where(item => !string.IsNullOrWhiteSpace(item.RegionCode))
+            .ToDictionary(item => item.RegionCode, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var rootGroup in rootGroups)
+        {
+            if (string.IsNullOrWhiteSpace(rootGroup.RegionCode))
+            {
+                details.Add($"{rootGroup.GroupName} 缺少 regionCode，无法对账");
+                continue;
+            }
+
+            if (!platformCountByRegionCode.TryGetValue(rootGroup.RegionCode, out var platformCount))
+            {
+                details.Add($"{rootGroup.GroupName}({rootGroup.RegionCode}) 平台未返回该 regionCode 对账记录");
+                continue;
+            }
+
+            var localCount = subtreeCounts.TryGetValue(rootGroup.GroupId, out var count)
+                ? count
+                : 0;
+            var expectedCount = Math.Max(platformCount.DeviceCount ?? 0, 0);
+            if (localCount == expectedCount)
+            {
+                continue;
+            }
+
+            if (localCount > expectedCount)
+            {
+                details.Add($"{rootGroup.GroupName}({rootGroup.RegionCode}) 本地 {localCount} / 平台 {expectedCount}；可能存在平台设备列表包含双目子通道或子通道口径，而 getCusDeviceCount 不含该口径，文档未说明，需人工确认");
+                continue;
+            }
+
+            details.Add($"{rootGroup.GroupName}({rootGroup.RegionCode}) 本地 {localCount} / 平台 {expectedCount}；当前本地少于平台对账数，可能是平台未下发完整目录层级或本地同步范围不足，需人工确认");
+        }
+
+        foreach (var platformCount in platformCounts)
+        {
+            if (string.IsNullOrWhiteSpace(platformCount.RegionCode))
+            {
+                continue;
+            }
+
+            var exists = rootGroups.Any(group => string.Equals(group.RegionCode, platformCount.RegionCode, StringComparison.OrdinalIgnoreCase));
+            if (!exists)
+            {
+                details.Add($"平台返回额外首层 regionCode {platformCount.RegionCode}，本地目录树未覆盖该对账范围");
+            }
+        }
+
+        return details;
     }
 
     private static Dictionary<string, int> BuildSubtreeDeviceCounts(

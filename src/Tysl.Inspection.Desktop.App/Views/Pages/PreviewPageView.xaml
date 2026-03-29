@@ -278,6 +278,90 @@
                             <TextBlock FontSize="16"
                                        FontWeight="SemiBold"
                                        Foreground="{DynamicResource PrimaryTextBrush}"
+                                       Text="点位最小详情" />
+
+                            <TextBlock Margin="0,12,0,0"
+                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                       Text="设备名称 / 编码" />
+                            <TextBlock Margin="0,4,0,0"
+                                       Foreground="{DynamicResource PrimaryTextBrush}"
+                                       TextWrapping="Wrap">
+                                <Run Text="{Binding DeviceName}" />
+                                <Run Text=" (" />
+                                <Run Text="{Binding DeviceCode}" />
+                                <Run Text=")" />
+                            </TextBlock>
+
+                            <TextBlock Margin="0,12,0,0"
+                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                       Text="所属目录路径" />
+                            <TextBlock Margin="0,4,0,0"
+                                       Foreground="{DynamicResource PrimaryTextBrush}"
+                                       TextWrapping="Wrap"
+                                       Text="{Binding SelectedDeviceDirectoryPathText}" />
+
+                            <Grid Margin="0,12,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="在线状态" />
+                                    <TextBlock Margin="0,4,0,0"
+                                               Foreground="{DynamicResource PrimaryTextBrush}"
+                                               Text="{Binding SelectedDeviceOnlineStatusText}" />
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="2">
+                                    <TextBlock Foreground="{DynamicResource SecondaryTextBrush}" Text="位置" />
+                                    <TextBlock Margin="0,4,0,0"
+                                               Foreground="{DynamicResource PrimaryTextBrush}"
+                                               TextWrapping="Wrap">
+                                        <Run Text="{Binding SelectedDeviceLatitudeText}" />
+                                        <Run Text=" / " />
+                                        <Run Text="{Binding SelectedDeviceLongitudeText}" />
+                                    </TextBlock>
+                                </StackPanel>
+                            </Grid>
+
+                            <TextBlock Margin="0,12,0,0"
+                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                       Text="地址信息" />
+                            <TextBlock Margin="0,4,0,0"
+                                       Foreground="{DynamicResource PrimaryTextBrush}"
+                                       TextWrapping="Wrap"
+                                       Text="{Binding SelectedDeviceLocationText}" />
+
+                            <TextBlock Margin="0,12,0,0"
+                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                       Text="最近巡检结论" />
+                            <TextBlock Margin="0,4,0,0"
+                                       Foreground="{DynamicResource PrimaryTextBrush}"
+                                       TextWrapping="Wrap"
+                                       Text="{Binding SelectedDeviceRecentInspectText}" />
+
+                            <TextBlock Margin="0,12,0,0"
+                                       Foreground="{DynamicResource SecondaryTextBrush}"
+                                       Text="异常池摘要" />
+                            <TextBlock Margin="0,4,0,0"
+                                       Foreground="{DynamicResource PrimaryTextBrush}"
+                                       TextWrapping="Wrap"
+                                       Text="{Binding SelectedDeviceAbnormalPoolText}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Margin="0,20,0,0"
+                            Padding="16"
+                            Background="{DynamicResource WindowBackgroundBrush}"
+                            BorderBrush="{DynamicResource CardBorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="16">
+                        <StackPanel>
+                            <TextBlock FontSize="16"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource PrimaryTextBrush}"
                                        Text="最小巡检诊断结果" />
 
                             <TextBlock Margin="0,12,0,0"
