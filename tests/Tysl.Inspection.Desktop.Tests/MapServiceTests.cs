@@ -56,6 +56,152 @@ public sealed class MapServiceTests
         Assert.Equal("121.469170", saved.MapLongitude);
     }
 
+    [Fact]
+    public async Task LoadAsync_KeepsSuccessfulProjectionWhenAnotherPointFails()
+    {
+        InspectionDevice[] devices =
+        [
+            new InspectionDevice(
+                "dev-001",
+                "测试设备一",
+                "group-001",
+                "31.2304",
+                "121.4737",
+                "上海",
+                1,
+                1,
+                1,
+                0,
+                DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"),
+                "platform",
+                CoordinateStateCatalog.Available,
+                "平台原始坐标来自 getDeviceInfoByDeviceCode。"),
+            new InspectionDevice(
+                "dev-002",
+                "测试设备二",
+                "group-001",
+                "30.5728",
+                "104.0668",
+                "成都",
+                0,
+                1,
+                1,
+                0,
+                DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"),
+                "platform",
+                CoordinateStateCatalog.Available,
+                "平台原始坐标来自 getDeviceInfoByDeviceCode。")
+        ];
+        var groupStore = new StubGroupSyncStore();
+        var service = new MapService(
+            new StubMapStore(devices),
+            groupStore,
+            new StubDeviceCoordinateService(devices),
+            new StubCoordinateProjectionService(
+                new Dictionary<string, CoordinateProjectionResult>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["dev-001"] = new(
+                        "dev-001",
+                        true,
+                        true,
+                        CoordinateStateCatalog.Available,
+                        "已获取并转换坐标",
+                        "地图 marker 仅使用转换后的高德坐标。",
+                        "31.224361",
+                        "121.469170"),
+                    ["dev-002"] = new(
+                        "dev-002",
+                        true,
+                        false,
+                        CoordinateStateCatalog.Failed,
+                        "坐标转换失败，需人工确认",
+                        "高德坐标转换未完成：status=error / invalid params",
+                        null,
+                        null)
+                }),
+            NullLogger<MapService>.Instance);
+
+        var result = await service.LoadAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal("31.224361", result.Devices.Single(device => device.DeviceCode == "dev-001").MapLatitude);
+        Assert.Null(result.Devices.Single(device => device.DeviceCode == "dev-002").MapLatitude);
+        var saved = Assert.Single(groupStore.UpdatedDevices);
+        Assert.Equal("dev-001", saved.DeviceCode);
+    }
+
+    [Fact]
+    public async Task LoadAsync_DoesNotWriteCoordinateCacheForMissingOrRateLimitedPoints()
+    {
+        InspectionDevice[] devices =
+        [
+            new InspectionDevice(
+                "dev-003",
+                "缺坐标设备",
+                "group-001",
+                null,
+                null,
+                "上海",
+                1,
+                1,
+                1,
+                0,
+                DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"),
+                "none",
+                CoordinateStateCatalog.Missing,
+                "平台未提供坐标。"),
+            new InspectionDevice(
+                "dev-004",
+                "限频设备",
+                "group-001",
+                null,
+                null,
+                "上海",
+                1,
+                1,
+                1,
+                0,
+                DateTimeOffset.Parse("2026-03-28T09:58:00+08:00"),
+                "none",
+                CoordinateStateCatalog.RateLimited,
+                "坐标获取限频，稍后重试。")
+        ];
+        var groupStore = new StubGroupSyncStore();
+        var service = new MapService(
+            new StubMapStore(devices),
+            groupStore,
+            new StubDeviceCoordinateService(devices),
+            new StubCoordinateProjectionService(
+                new Dictionary<string, CoordinateProjectionResult>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["dev-003"] = new(
+                        "dev-003",
+                        false,
+                        false,
+                        CoordinateStateCatalog.Missing,
+                        "平台未提供坐标",
+                        "平台未提供坐标，当前不进入上图。",
+                        null,
+                        null),
+                    ["dev-004"] = new(
+                        "dev-004",
+                        false,
+                        false,
+                        CoordinateStateCatalog.RateLimited,
+                        "坐标获取限频，稍后重试",
+                        "坐标获取限频，稍后重试。",
+                        null,
+                        null)
+                }),
+            NullLogger<MapService>.Instance);
+
+        var result = await service.LoadAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.All(result.Devices, device => Assert.Null(device.MapLatitude));
+        Assert.Empty(groupStore.UpdatedDevices);
+    }
+
     private sealed class StubMapStore(IReadOnlyList<InspectionDevice> devices) : IMapStore
     {
         public Task<IReadOnlyList<InspectionDevice>> GetDevicesAsync(CancellationToken cancellationToken)

@@ -6,8 +6,46 @@
 </head>
 <body>
     <script>
+        const ProtocolType = "coord-conversion-batch";
+        const ProtocolVersion = "1.0";
+
         function formatCoordinate(value) {
             return Number(value).toFixed(6);
+        }
+
+        function buildBatchPayload(items, errors) {
+            const safeItems = Array.isArray(items) ? items : [];
+            const safeErrors = Array.isArray(errors) ? errors : [];
+
+            return {
+                type: ProtocolType,
+                protocolVersion: ProtocolVersion,
+                requestedCount: safeItems.length,
+                successCount: safeItems.filter((item) => item && item.hasMapCoordinate).length,
+                failedCount: safeItems.filter((item) => item && item.coordinateState === "failed").length,
+                missingCount: safeItems.filter((item) => item && item.coordinateState === "missing").length,
+                errorCount: safeErrors.length,
+                items: safeItems,
+                errors: safeErrors
+            };
+        }
+
+        function buildBatchError(stage, message) {
+            return {
+                stage: stage || "unknown",
+                message: message || "未返回明确错误信息。"
+            };
+        }
+
+        function buildFailedPoint(point, message) {
+            return Object.assign({}, point, {
+                coordinateState: "failed",
+                coordinateStateText: "坐标转换失败，需人工确认",
+                coordinateWarning: message || "坐标转换失败，需人工确认。",
+                hasMapCoordinate: false,
+                mapLatitude: null,
+                mapLongitude: null
+            });
         }
 
         async function ensureMapScript(config) {
@@ -64,6 +102,26 @@
             };
         }
 
+        function buildIncompleteReason(status, result) {
+            const parts = [];
+            const normalizedStatus = String(status || "").trim();
+            const info = result && typeof result.info === "string"
+                ? result.info.trim()
+                : "";
+
+            if (normalizedStatus) {
+                parts.push(`status=${normalizedStatus}`);
+            }
+
+            if (info) {
+                parts.push(info);
+            }
+
+            return parts.length > 0
+                ? `高德坐标转换未完成：${parts.join(" / ")}`
+                : "高德坐标转换未完成，需人工确认。";
+        }
+
         async function convertPoint(point, rawCoordinateSystem) {
             if (!point.hasRawCoordinate) {
                 return Object.assign({}, point, {
@@ -77,14 +135,7 @@
             }
 
             if (!window.AMap || typeof window.AMap.convertFrom !== "function") {
-                return Object.assign({}, point, {
-                    coordinateState: "failed",
-                    coordinateStateText: "坐标转换失败，需人工确认",
-                    coordinateWarning: "高德地图坐标转换能力不可用，需人工确认。",
-                    hasMapCoordinate: false,
-                    mapLatitude: null,
-                    mapLongitude: null
-                });
+                return buildFailedPoint(point, "高德地图坐标转换能力不可用，需人工确认。");
             }
 
             return await new Promise((resolve) => {
@@ -93,38 +144,26 @@
 
                 window.AMap.convertFrom([lng, lat], rawCoordinateSystem || "baidu", (status, result) => {
                     if (status !== "complete") {
-                        resolve(Object.assign({}, point, {
-                            coordinateState: "failed",
-                            coordinateStateText: "坐标转换失败，需人工确认",
-                            coordinateWarning: "高德坐标转换未完成，需人工确认。",
-                            hasMapCoordinate: false,
-                            mapLatitude: null,
-                            mapLongitude: null
-                        }));
+                        resolve(buildFailedPoint(point, buildIncompleteReason(status, result)));
                         return;
                     }
 
                     try {
                         const converted = resolveConvertedLocation(result);
                         resolve(Object.assign({}, point, {
-                            coordinateState: "converted",
-                            coordinateStateText: "已转换为高德",
+                            coordinateState: "available",
+                            coordinateStateText: "已获取并转换坐标",
                             coordinateWarning: "地图 marker 仅使用转换后的高德坐标。",
                             hasMapCoordinate: true,
                             mapLatitude: converted.lat,
                             mapLongitude: converted.lng
                         }));
                     } catch (error) {
-                        resolve(Object.assign({}, point, {
-                            coordinateState: "failed",
-                            coordinateStateText: "坐标转换失败，需人工确认",
-                            coordinateWarning: error && error.message
+                        resolve(buildFailedPoint(
+                            point,
+                            error && error.message
                                 ? error.message
-                                : "高德坐标转换结果无效，需人工确认。",
-                            hasMapCoordinate: false,
-                            mapLatitude: null,
-                            mapLongitude: null
-                        }));
+                                : "高德坐标转换结果无效，需人工确认。"));
                     }
                 });
             });
@@ -133,13 +172,42 @@
         window.coordConv = {
             async convertBatch(points, config) {
                 const safePoints = Array.isArray(points) ? points : [];
-                if (safePoints.some((point) => point.hasRawCoordinate)) {
-                    await ensureMapScript(config || {});
+                if (!safePoints.some((point) => point.hasRawCoordinate)) {
+                    return buildBatchPayload(
+                        await Promise.all(
+                            safePoints.map((point) => convertPoint(point, config?.rawCoordinateSystem || "baidu"))
+                        ),
+                        []);
                 }
 
-                return await Promise.all(
-                    safePoints.map((point) => convertPoint(point, config?.rawCoordinateSystem || "baidu"))
-                );
+                try {
+                    await ensureMapScript(config || {});
+                } catch (error) {
+                    const message = error && error.message
+                        ? error.message
+                        : "高德地图脚本加载失败，请检查 Key 配置或网络连接。";
+                    return buildBatchPayload(
+                        safePoints.map((point) => point.hasRawCoordinate
+                            ? buildFailedPoint(point, message)
+                            : point),
+                        [buildBatchError("load-script", message)]);
+                }
+
+                try {
+                    const items = await Promise.all(
+                        safePoints.map((point) => convertPoint(point, config?.rawCoordinateSystem || "baidu"))
+                    );
+                    return buildBatchPayload(items, []);
+                } catch (error) {
+                    const message = error && error.message
+                        ? error.message
+                        : "高德地图坐标转换失败，需人工确认。";
+                    return buildBatchPayload(
+                        safePoints.map((point) => point.hasRawCoordinate
+                            ? buildFailedPoint(point, message)
+                            : point),
+                        [buildBatchError("convert-batch", message)]);
+                }
             }
         };
     </script>

@@ -14,6 +14,8 @@ public sealed class AmapCoordProjector(
     ILogger<AmapCoordProjector> logger) : ICoordinateProjectionService, IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private const string ProtocolType = "coord-conversion-batch";
+    private const string ProtocolVersion = "1.0";
 
     private readonly SemaphoreSlim gate = new(1, 1);
     private System.Windows.Window? hostWindow;
@@ -106,9 +108,38 @@ public sealed class AmapCoordProjector(
                     return await window.coordConv.convertBatch({{pointsJson}}, {{configJson}});
                 })()
                 """;
+
+            logger.LogInformation(
+                "AMap JS projection request dispatched. CandidateCount={CandidateCount}, DeviceCodes={DeviceCodes}.",
+                conversionCandidates.Count,
+                string.Join(", ", conversionCandidates.Take(5).Select(item => item.DeviceCode)));
+
             var responseJson = await ExecuteScriptAsync(script);
-            var payloads = JsonSerializer.Deserialize<List<ProjectionPayload>>(responseJson, JsonOptions) ?? [];
-            var payloadByDeviceCode = payloads
+            logger.LogInformation(
+                "AMap JS projection raw payload received. ResponseLength={ResponseLength}, PayloadSummary={PayloadSummary}.",
+                responseJson.Length,
+                DescribeBatchPayloadSummary(responseJson));
+
+            var batchPayload = ParseBatchPayload(responseJson);
+            logger.LogInformation(
+                "AMap JS projection payload parsed. ItemCount={ItemCount}, SuccessCount={SuccessCount}, FailedCount={FailedCount}, ErrorCount={ErrorCount}.",
+                batchPayload.Items.Count,
+                batchPayload.SuccessCount,
+                batchPayload.FailedCount,
+                batchPayload.Errors.Count);
+
+            if (batchPayload.Errors.Count > 0)
+            {
+                logger.LogWarning(
+                    "AMap JS projection payload contains errors. ErrorSummary={ErrorSummary}.",
+                    string.Join(
+                        " | ",
+                        batchPayload.Errors
+                            .Take(3)
+                            .Select(error => $"{error.Stage}:{error.DeviceCode ?? "<none>"}:{error.Message}")));
+            }
+
+            var payloadByDeviceCode = batchPayload.Items
                 .Where(item => !string.IsNullOrWhiteSpace(item.DeviceCode))
                 .ToDictionary(item => item.DeviceCode!, StringComparer.OrdinalIgnoreCase);
 
@@ -260,6 +291,77 @@ public sealed class AmapCoordProjector(
                 : payload.CoordinateWarning);
     }
 
+    internal static ProjectionBatchPayload ParseBatchPayload(string responseJson)
+    {
+        var normalizedJson = NormalizeScriptResultJson(responseJson, out var transportRootKind);
+        using var document = JsonDocument.Parse(normalizedJson);
+        var root = document.RootElement;
+
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException(
+                $"高德坐标转换回传结构无效：期望对象，实际为 {root.ValueKind}。");
+        }
+
+        var type = ReadString(root, "type") ?? string.Empty;
+        var version = ReadString(root, "protocolVersion") ?? string.Empty;
+        if (!string.Equals(type, ProtocolType, StringComparison.Ordinal)
+            || !string.Equals(version, ProtocolVersion, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"高德坐标转换回传协议无效：type={type}, protocolVersion={version}。");
+        }
+
+        if (!root.TryGetProperty("items", out var itemsElement)
+            || itemsElement.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException("高德坐标转换回传缺少 items 数组。");
+        }
+
+        var errors = ParseErrors(root);
+        var items = new List<ProjectionPayload>(itemsElement.GetArrayLength());
+
+        foreach (var itemElement in itemsElement.EnumerateArray())
+        {
+            var parsedItem = ParseItem(itemElement, errors);
+            if (parsedItem is not null)
+            {
+                items.Add(parsedItem);
+            }
+        }
+
+        return new ProjectionBatchPayload(
+            type,
+            version,
+            ReadInt(root, "requestedCount"),
+            ReadInt(root, "successCount"),
+            ReadInt(root, "failedCount"),
+            ReadInt(root, "missingCount"),
+            transportRootKind,
+            items,
+            errors);
+    }
+
+    internal static string DescribeBatchPayloadSummary(string responseJson)
+    {
+        try
+        {
+            var payload = ParseBatchPayload(responseJson);
+            return string.Create(
+                CultureInfo.InvariantCulture,
+                $"transport={payload.TransportRootKind},type={payload.Type},protocolVersion={payload.ProtocolVersion},requested={payload.RequestedCount},items={payload.Items.Count},success={payload.SuccessCount},failed={payload.FailedCount},missing={payload.MissingCount},errors={payload.Errors.Count}");
+        }
+        catch (Exception exception)
+        {
+            var snippet = responseJson.Length <= 240
+                ? responseJson
+                : responseJson[..240];
+            return string.Create(
+                CultureInfo.InvariantCulture,
+                $"unparsed:{exception.Message};snippet={snippet}");
+        }
+    }
+
     private static CoordinateProjectionResult BuildCachedMapResult(CoordinateProjectionRequest request)
     {
         return new CoordinateProjectionResult(
@@ -339,6 +441,206 @@ public sealed class AmapCoordProjector(
         };
     }
 
+    private static string NormalizeScriptResultJson(string responseJson, out string transportRootKind)
+    {
+        var current = responseJson;
+        transportRootKind = JsonValueKind.Undefined.ToString();
+
+        for (var depth = 0; depth < 3; depth++)
+        {
+            using var document = JsonDocument.Parse(current);
+            if (depth == 0)
+            {
+                transportRootKind = document.RootElement.ValueKind.ToString();
+            }
+
+            if (document.RootElement.ValueKind != JsonValueKind.String)
+            {
+                return current;
+            }
+
+            var innerJson = document.RootElement.GetString();
+            if (string.IsNullOrWhiteSpace(innerJson))
+            {
+                throw new InvalidOperationException("高德坐标转换回传为空字符串。");
+            }
+
+            current = innerJson;
+        }
+
+        throw new InvalidOperationException("高德坐标转换回传嵌套层级超出预期。");
+    }
+
+    private static List<ProjectionErrorPayload> ParseErrors(JsonElement root)
+    {
+        if (!root.TryGetProperty("errors", out var errorsElement)
+            || errorsElement.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var errors = new List<ProjectionErrorPayload>(errorsElement.GetArrayLength());
+        foreach (var errorElement in errorsElement.EnumerateArray())
+        {
+            if (errorElement.ValueKind != JsonValueKind.Object)
+            {
+                errors.Add(new ProjectionErrorPayload("payload", null, $"errors[] 节点类型无效：{errorElement.ValueKind}。"));
+                continue;
+            }
+
+            errors.Add(new ProjectionErrorPayload(
+                ReadString(errorElement, "stage") ?? "payload",
+                ReadString(errorElement, "deviceCode"),
+                ReadString(errorElement, "message") ?? "未返回明确错误信息。"));
+        }
+
+        return errors;
+    }
+
+    private static ProjectionPayload? ParseItem(JsonElement itemElement, List<ProjectionErrorPayload> errors)
+    {
+        if (itemElement.ValueKind != JsonValueKind.Object)
+        {
+            errors.Add(new ProjectionErrorPayload("item-parse", null, $"items[] 节点类型无效：{itemElement.ValueKind}。"));
+            return null;
+        }
+
+        var deviceCode = ReadString(itemElement, "deviceCode");
+        if (string.IsNullOrWhiteSpace(deviceCode))
+        {
+            errors.Add(new ProjectionErrorPayload("item-parse", null, "items[] 缺少 deviceCode。"));
+            return null;
+        }
+
+        if (!TryReadBool(itemElement, "hasRawCoordinate", out var hasRawCoordinate, out var rawError))
+        {
+            return BuildMalformedItem(deviceCode, rawError, errors);
+        }
+
+        if (!TryReadBool(itemElement, "hasMapCoordinate", out var hasMapCoordinate, out var mapError))
+        {
+            return BuildMalformedItem(deviceCode, mapError, errors);
+        }
+
+        var coordinateState = ReadString(itemElement, "coordinateState");
+        var coordinateStateText = ReadString(itemElement, "coordinateStateText");
+        var coordinateWarning = ReadString(itemElement, "coordinateWarning");
+        var mapLatitude = ReadString(itemElement, "mapLatitude");
+        var mapLongitude = ReadString(itemElement, "mapLongitude");
+
+        return new ProjectionPayload(
+            deviceCode,
+            hasRawCoordinate,
+            hasMapCoordinate,
+            string.IsNullOrWhiteSpace(coordinateState) ? CoordinateStateCatalog.Failed : coordinateState,
+            coordinateStateText,
+            coordinateWarning,
+            mapLatitude,
+            mapLongitude);
+    }
+
+    private static ProjectionPayload BuildMalformedItem(
+        string deviceCode,
+        string? errorMessage,
+        List<ProjectionErrorPayload> errors)
+    {
+        var message = string.IsNullOrWhiteSpace(errorMessage)
+            ? "坐标转换回传解析失败，需人工确认。"
+            : $"坐标转换回传解析失败：{errorMessage}";
+        errors.Add(new ProjectionErrorPayload("item-parse", deviceCode, message));
+        return new ProjectionPayload(
+            deviceCode,
+            true,
+            false,
+            CoordinateStateCatalog.Failed,
+            "坐标转换失败，需人工确认",
+            message,
+            null,
+            null);
+    }
+
+    private static string? ReadString(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var value))
+        {
+            return null;
+        }
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.Null => null,
+            JsonValueKind.String => value.GetString(),
+            JsonValueKind.Number => value.GetRawText(),
+            JsonValueKind.True => bool.TrueString.ToLowerInvariant(),
+            JsonValueKind.False => bool.FalseString.ToLowerInvariant(),
+            _ => value.GetRawText()
+        };
+    }
+
+    private static int ReadInt(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var value))
+        {
+            return 0;
+        }
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number))
+        {
+            return number;
+        }
+
+        return value.ValueKind == JsonValueKind.String
+               && int.TryParse(value.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out number)
+            ? number
+            : 0;
+    }
+
+    private static bool TryReadBool(
+        JsonElement element,
+        string propertyName,
+        out bool value,
+        out string? errorMessage)
+    {
+        errorMessage = null;
+        value = false;
+
+        if (!element.TryGetProperty(propertyName, out var property))
+        {
+            errorMessage = $"缺少 {propertyName}。";
+            return false;
+        }
+
+        switch (property.ValueKind)
+        {
+            case JsonValueKind.True:
+                value = true;
+                return true;
+            case JsonValueKind.False:
+                value = false;
+                return true;
+            case JsonValueKind.String:
+                if (bool.TryParse(property.GetString(), out value))
+                {
+                    return true;
+                }
+
+                errorMessage = $"{propertyName} 不是有效布尔值。";
+                return false;
+            case JsonValueKind.Number:
+                if (property.TryGetInt32(out var number))
+                {
+                    value = number != 0;
+                    return true;
+                }
+
+                errorMessage = $"{propertyName} 不是有效布尔值。";
+                return false;
+            default:
+                errorMessage = $"{propertyName} 节点类型无效：{property.ValueKind}。";
+                return false;
+        }
+    }
+
     private static async Task RunOnUiAsync(Func<Task> action)
     {
         var dispatcher = System.Windows.Application.Current?.Dispatcher
@@ -357,7 +659,23 @@ public sealed class AmapCoordProjector(
         return await innerTask;
     }
 
-    private sealed record ProjectionPayload(
+    internal sealed record ProjectionBatchPayload(
+        string Type,
+        string ProtocolVersion,
+        int RequestedCount,
+        int SuccessCount,
+        int FailedCount,
+        int MissingCount,
+        string TransportRootKind,
+        IReadOnlyList<ProjectionPayload> Items,
+        IReadOnlyList<ProjectionErrorPayload> Errors);
+
+    internal sealed record ProjectionErrorPayload(
+        string Stage,
+        string? DeviceCode,
+        string Message);
+
+    internal sealed record ProjectionPayload(
         string? DeviceCode,
         bool HasRawCoordinate,
         bool HasMapCoordinate,
