@@ -7,6 +7,34 @@ namespace Tysl.Inspection.Desktop.Tests;
 public sealed class AmapCoordProjectorTests
 {
     [Fact]
+    public void ParseHostReadyPayload_UnwrapsWrappedReadyEnvelope()
+    {
+        const string readyJson = """
+            {
+              "type": "coord-conv-ready",
+              "protocolVersion": "1.0",
+              "ready": true,
+              "scriptLoaded": true,
+              "hasAmap": true,
+              "hasConvertFrom": true,
+              "errorStage": "",
+              "errorMessage": ""
+            }
+            """;
+        var responseJson = JsonSerializer.Serialize(readyJson);
+
+        var payload = AmapCoordProjector.ParseHostReadyPayload(responseJson);
+
+        Assert.Equal("coord-conv-ready", payload.Type);
+        Assert.Equal("1.0", payload.ProtocolVersion);
+        Assert.True(payload.Ready);
+        Assert.True(payload.ScriptLoaded);
+        Assert.True(payload.HasAmap);
+        Assert.True(payload.HasConvertFrom);
+        Assert.Equal("String", payload.TransportRootKind);
+    }
+
+    [Fact]
     public void ParseBatchPayload_UnwrapsStringifiedEnvelopeAndReadsItems()
     {
         const string batchJson = """
@@ -16,26 +44,32 @@ public sealed class AmapCoordProjectorTests
               "requestedCount": 2,
               "successCount": 1,
               "failedCount": 1,
-              "missingCount": 0,
               "errorCount": 0,
               "items": [
                 {
                   "deviceCode": "dev-001",
                   "hasRawCoordinate": true,
                   "hasMapCoordinate": true,
+                  "mapSource": "amap_js_convert_from_baidu",
                   "coordinateState": "available",
-                  "coordinateStateText": "已获取并转换坐标",
-                  "coordinateWarning": "地图 marker 仅使用转换后的高德坐标。",
+                  "coordinateStateText": "Coordinate converted to GCJ-02.",
                   "mapLatitude": "31.224361",
-                  "mapLongitude": "121.469170"
+                  "mapLongitude": "121.469170",
+                  "amapStatus": "complete",
+                  "amapInfo": "ok"
                 },
                 {
                   "deviceCode": "dev-002",
                   "hasRawCoordinate": true,
                   "hasMapCoordinate": false,
+                  "mapSource": "amap_js_convert_from_baidu",
                   "coordinateState": "failed",
-                  "coordinateStateText": "坐标转换失败，需人工确认",
-                  "coordinateWarning": "status=error / invalid params",
+                  "coordinateStateText": "Coordinate conversion failed.",
+                  "errorStage": "convert_from",
+                  "errorCode": "convert_from_failed",
+                  "errorMessage": "AMap.convertFrom failed: invalid params",
+                  "amapStatus": "error",
+                  "amapInfo": "invalid params",
                   "mapLatitude": null,
                   "mapLongitude": null
                 }
@@ -67,16 +101,15 @@ public sealed class AmapCoordProjectorTests
               "requestedCount": 2,
               "successCount": 1,
               "failedCount": 1,
-              "missingCount": 0,
               "errorCount": 0,
               "items": [
                 {
                   "deviceCode": "dev-001",
                   "hasRawCoordinate": true,
                   "hasMapCoordinate": true,
+                  "mapSource": "amap_js_convert_from_baidu",
                   "coordinateState": "available",
-                  "coordinateStateText": "已获取并转换坐标",
-                  "coordinateWarning": "地图 marker 仅使用转换后的高德坐标。",
+                  "coordinateStateText": "Coordinate converted to GCJ-02.",
                   "mapLatitude": "31.224361",
                   "mapLongitude": "121.469170"
                 },
@@ -84,9 +117,9 @@ public sealed class AmapCoordProjectorTests
                   "deviceCode": "dev-002",
                   "hasRawCoordinate": true,
                   "hasMapCoordinate": "oops",
+                  "mapSource": "amap_js_convert_from_baidu",
                   "coordinateState": "available",
-                  "coordinateStateText": "已获取并转换坐标",
-                  "coordinateWarning": "地图 marker 仅使用转换后的高德坐标。"
+                  "coordinateStateText": "Coordinate converted to GCJ-02."
                 }
               ],
               "errors": []
@@ -100,21 +133,25 @@ public sealed class AmapCoordProjectorTests
         Assert.Equal("dev-001", valid.DeviceCode);
         Assert.False(malformed.HasMapCoordinate);
         Assert.Equal(CoordinateStateCatalog.Failed, malformed.CoordinateState);
-        Assert.Contains("回传解析失败", malformed.CoordinateWarning);
         Assert.Contains(payload.Errors, error => string.Equals(error.DeviceCode, "dev-002", StringComparison.OrdinalIgnoreCase));
     }
 
-    [Fact]
-    public void ParseBatchPayload_ReadsPerItemDiagnosticsForStringShapedResult()
+    [Theory]
+    [InlineData("string", "complete", "ok")]
+    [InlineData("object", "complete", "ok")]
+    [InlineData("array", "complete", "ok")]
+    public void ParseBatchPayload_ReadsPerItemDiagnosticsForDifferentResultLocationKinds(
+        string resultLocationKind,
+        string amapStatus,
+        string amapInfo)
     {
-        const string responseJson = """
+        var responseJson = $$"""
             {
               "type": "coord-conversion-batch",
               "protocolVersion": "1.0",
               "requestedCount": 1,
               "successCount": 1,
               "failedCount": 0,
-              "missingCount": 0,
               "errorCount": 0,
               "items": [
                 {
@@ -123,14 +160,14 @@ public sealed class AmapCoordProjectorTests
                   "rawLongitude": "121.4737",
                   "hasRawCoordinate": true,
                   "hasMapCoordinate": true,
+                  "mapSource": "amap_js_convert_from_baidu",
                   "coordinateState": "available",
-                  "coordinateStateText": "已获取并转换坐标",
-                  "coordinateWarning": "地图 marker 仅使用转换后的高德坐标。",
+                  "coordinateStateText": "Coordinate converted to GCJ-02.",
                   "mapLatitude": "31.224361",
                   "mapLongitude": "121.469170",
-                  "conversionStatus": "complete",
-                  "conversionInfo": "ok",
-                  "resultLocationKind": "string",
+                  "amapStatus": "{{amapStatus}}",
+                  "amapInfo": "{{amapInfo}}",
+                  "resultLocationKind": "{{resultLocationKind}}",
                   "resultLatitude": "31.224361",
                   "resultLongitude": "121.469170"
                 }
@@ -145,9 +182,9 @@ public sealed class AmapCoordProjectorTests
         Assert.Equal("dev-003", item.DeviceCode);
         Assert.Equal("31.2304", item.RawLatitude);
         Assert.Equal("121.4737", item.RawLongitude);
-        Assert.Equal("complete", item.ConversionStatus);
-        Assert.Equal("ok", item.ConversionInfo);
-        Assert.Equal("string", item.ResultLocationKind);
+        Assert.Equal(amapStatus, item.AmapStatus);
+        Assert.Equal(amapInfo, item.AmapInfo);
+        Assert.Equal(resultLocationKind, item.ResultLocationKind);
         Assert.Equal("31.224361", item.ResultLatitude);
         Assert.Equal("121.469170", item.ResultLongitude);
     }
@@ -163,16 +200,15 @@ public sealed class AmapCoordProjectorTests
     }
 
     [Fact]
-    public void ParseBatchPayload_ReadsErrorFieldsUsingNewEnvelopeShape()
+    public void ParseBatchPayload_ReadsErrorFieldsUsingUnifiedEnvelopeShape()
     {
         const string responseJson = """
             {
               "type": "coord-conversion-batch",
-              "protocolVersion": "1.1",
+              "protocolVersion": "1.0",
               "requestedCount": 1,
               "successCount": 0,
               "failedCount": 1,
-              "missingCount": 0,
               "errorCount": 1,
               "items": [
                 {
@@ -181,21 +217,21 @@ public sealed class AmapCoordProjectorTests
                   "rawLongitude": "121.4737",
                   "hasRawCoordinate": true,
                   "hasMapCoordinate": false,
+                  "mapSource": "amap_js_convert_from_baidu",
                   "coordinateState": "failed",
-                  "coordinateStateText": "高德回传值非法",
-                  "coordinateWarning": "AMap.convertFrom returned invalid coordinates.",
-                  "errorStage": "result-parse",
+                  "coordinateStateText": "AMap returned an invalid converted coordinate.",
+                  "amapStatus": "error",
+                  "amapInfo": "ok",
+                  "errorStage": "result_parse",
                   "errorCode": "result_location_invalid",
                   "errorMessage": "AMap.convertFrom returned invalid coordinates.",
                   "rawResultSnippet": "{\"lng\":null,\"lat\":31.2}",
-                  "conversionStatus": "complete",
-                  "conversionInfo": "ok",
                   "resultLocationKind": "object"
                 }
               ],
               "errors": [
                 {
-                  "stage": "result-parse",
+                  "stage": "result_parse",
                   "deviceCode": "dev-009",
                   "errorCode": "result_location_invalid",
                   "message": "AMap.convertFrom returned invalid coordinates."
@@ -208,11 +244,12 @@ public sealed class AmapCoordProjectorTests
         var item = Assert.Single(payload.Items);
         var error = Assert.Single(payload.Errors);
 
-        Assert.Equal("result-parse", item.ErrorStage);
+        Assert.Equal("result_parse", item.ErrorStage);
         Assert.Equal("result_location_invalid", item.ErrorCode);
         Assert.Equal("AMap.convertFrom returned invalid coordinates.", item.ErrorMessage);
         Assert.Equal("{\"lng\":null,\"lat\":31.2}", item.RawResultSnippet);
-        Assert.Equal("result-parse", error.Stage);
+        Assert.Equal("error", item.AmapStatus);
+        Assert.Equal("result_parse", error.Stage);
         Assert.Equal("result_location_invalid", error.ErrorCode);
     }
 }

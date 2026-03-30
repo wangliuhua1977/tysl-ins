@@ -6,20 +6,32 @@
 </head>
 <body>
     <script>
-        const ProtocolType = "coord-conversion-batch";
-        const ProtocolVersion = "1.1";
+        const BatchProtocolType = "coord-conversion-batch";
+        const BatchProtocolVersion = "1.0";
+        const ReadyProtocolType = "coord-conv-ready";
+        const ReadyProtocolVersion = "1.0";
+        const DefaultRawCoordinateSystem = "baidu";
+        const CallbackTimeoutMs = 10000;
+        const SummaryLimit = 300;
 
         const hostState = {
             config: null,
-            scriptLoadPromise: null,
+            domReady: document.readyState !== "loading",
             ready: false,
-            readyError: ""
+            readyError: "",
+            readyPromise: null,
+            scriptLoadPromise: null,
+            scriptLoaded: false,
+            hasAmap: false,
+            hasConvertFrom: false
         };
 
         function postHostMessage(type, payload) {
-            if (window.chrome && window.chrome.webview) {
-                window.chrome.webview.postMessage(Object.assign({ type }, payload || {}));
+            if (!window.chrome || !window.chrome.webview) {
+                return;
             }
+
+            window.chrome.webview.postMessage(Object.assign({ type }, payload || {}));
         }
 
         function postLog(message, payload, level) {
@@ -31,16 +43,30 @@
                 payload || {}));
         }
 
-        function formatCoordinate(value) {
-            return Number(value).toFixed(6);
+        function summarize(value, maxLength) {
+            const limit = typeof maxLength === "number" ? maxLength : SummaryLimit;
+
+            let text = "";
+            if (typeof value === "string") {
+                text = value;
+            } else if (value !== null && value !== undefined) {
+                try {
+                    text = JSON.stringify(value);
+                } catch {
+                    text = String(value);
+                }
+            }
+
+            if (!text) {
+                return "";
+            }
+
+            return text.length <= limit
+                ? text
+                : text.slice(0, limit);
         }
 
-        function toFiniteCoordinate(value) {
-            const number = Number(value);
-            return Number.isFinite(number) ? number : null;
-        }
-
-        function resultKind(value) {
+        function valueKind(value) {
             if (Array.isArray(value)) {
                 return "array";
             }
@@ -52,20 +78,37 @@
             return typeof value;
         }
 
-        function trimSnippet(value, maxLength) {
-            const text = typeof value === "string"
-                ? value
-                : JSON.stringify(value);
-            if (!text) {
-                return "";
+        function parseJsonMaybe(value) {
+            if (typeof value !== "string") {
+                return null;
             }
 
-            return text.length <= maxLength
-                ? text
-                : text.slice(0, maxLength);
+            const text = value.trim();
+            if (!text) {
+                return null;
+            }
+
+            if ((text.startsWith("{") && text.endsWith("}")) || (text.startsWith("[") && text.endsWith("]"))) {
+                try {
+                    return JSON.parse(text);
+                } catch {
+                    return null;
+                }
+            }
+
+            return null;
         }
 
-        function buildBatchError(stage, message, errorCode, deviceCode) {
+        function toFiniteCoordinate(value) {
+            const number = Number(value);
+            return Number.isFinite(number) ? number : null;
+        }
+
+        function formatCoordinate(value) {
+            return Number(value).toFixed(6);
+        }
+
+        function createBatchError(stage, message, errorCode, deviceCode) {
             return {
                 stage: stage || "unknown",
                 message: message || "No detailed error message returned.",
@@ -74,72 +117,105 @@
             };
         }
 
-        function buildEnvelope(items, errors, requestedCount) {
-            const safeItems = Array.isArray(items) ? items : [];
-            const safeErrors = Array.isArray(errors) ? errors : [];
+        function createEnvelope(requestedCount, items, errors) {
+            const safeItems = Array.isArray(items) ? items.filter(Boolean) : [];
+            const safeErrors = Array.isArray(errors) ? errors.filter(Boolean) : [];
 
             return {
-                type: ProtocolType,
-                protocolVersion: ProtocolVersion,
+                type: BatchProtocolType,
+                protocolVersion: BatchProtocolVersion,
                 requestedCount: typeof requestedCount === "number" ? requestedCount : safeItems.length,
                 successCount: safeItems.filter((item) => item && item.hasMapCoordinate).length,
                 failedCount: safeItems.filter((item) => item && item.coordinateState === "failed").length,
-                missingCount: safeItems.filter((item) => item && item.coordinateState === "missing").length,
-                errorCount: safeErrors.length,
                 items: safeItems,
                 errors: safeErrors
             };
         }
 
-        function buildFailedPoint(point, options) {
-            const safeOptions = options || {};
-            const errorMessage = safeOptions.errorMessage || "Coordinate conversion or parsing failed.";
-
+        function createReadyPayload(ready, errorStage, errorMessage) {
             return {
-                deviceCode: point.deviceCode || "",
-                rawLatitude: point.rawLatitude ?? null,
-                rawLongitude: point.rawLongitude ?? null,
-                hasRawCoordinate: safeOptions.hasRawCoordinate ?? true,
-                hasMapCoordinate: false,
-                coordinateState: safeOptions.coordinateState || "failed",
-                coordinateStateText: safeOptions.coordinateStateText || "坐标转换或解析失败",
-                coordinateWarning: safeOptions.coordinateWarning || errorMessage,
-                mapLatitude: null,
-                mapLongitude: null,
-                errorStage: safeOptions.errorStage || "unknown",
-                errorCode: safeOptions.errorCode || "unknown",
-                errorMessage,
-                rawResultSnippet: safeOptions.rawResultSnippet || "",
-                conversionStatus: safeOptions.conversionStatus || "",
-                conversionInfo: safeOptions.conversionInfo || "",
-                resultLocationKind: safeOptions.resultLocationKind || "",
-                resultLatitude: safeOptions.resultLatitude ?? null,
-                resultLongitude: safeOptions.resultLongitude ?? null
+                type: ReadyProtocolType,
+                protocolVersion: ReadyProtocolVersion,
+                ready: !!ready,
+                scriptLoaded: hostState.scriptLoaded,
+                hasAmap: hostState.hasAmap,
+                hasConvertFrom: hostState.hasConvertFrom,
+                errorStage: errorStage || "",
+                errorMessage: errorMessage || ""
             };
         }
 
-        function buildAvailablePoint(point, resolved, status, info) {
+        function buildItemBase(point, hasRawCoordinate) {
             return {
                 deviceCode: point.deviceCode || "",
-                rawLatitude: point.rawLatitude ?? null,
+                hasRawCoordinate: !!hasRawCoordinate,
+                hasMapCoordinate: false,
+                mapSource: point.mapSource || "amap_js_convert_from_baidu",
+                coordinateState: "failed",
+                coordinateStateText: "Coordinate conversion failed.",
                 rawLongitude: point.rawLongitude ?? null,
-                hasRawCoordinate: true,
-                hasMapCoordinate: true,
-                coordinateState: "available",
-                coordinateStateText: "已获取并转换坐标",
-                coordinateWarning: "地图 marker 仅使用转换后的高德坐标。",
-                mapLatitude: resolved.lat,
-                mapLongitude: resolved.lng,
+                rawLatitude: point.rawLatitude ?? null,
+                mapLongitude: null,
+                mapLatitude: null,
+                amapStatus: "error",
+                amapInfo: "",
                 errorStage: "",
                 errorCode: "",
-                errorMessage: "",
-                rawResultSnippet: "",
-                conversionStatus: status || "",
-                conversionInfo: info || "",
-                resultLocationKind: resolved.resultLocationKind || "",
-                resultLatitude: resolved.resultLatitude || resolved.lat,
-                resultLongitude: resolved.resultLongitude || resolved.lng
+                errorMessage: ""
             };
+        }
+
+        function buildFailedItem(point, options) {
+            const safeOptions = options || {};
+            const hasRawCoordinate = safeOptions.hasRawCoordinate !== undefined
+                ? !!safeOptions.hasRawCoordinate
+                : point.rawLatitude !== undefined && point.rawLongitude !== undefined;
+            const item = buildItemBase(point, hasRawCoordinate);
+
+            item.coordinateState = safeOptions.coordinateState || "failed";
+            item.coordinateStateText = safeOptions.coordinateStateText || "Coordinate conversion failed.";
+            item.mapSource = safeOptions.mapSource || item.mapSource;
+            item.amapStatus = safeOptions.amapStatus || "error";
+            item.amapInfo = safeOptions.amapInfo || "";
+            item.errorStage = safeOptions.errorStage || "unknown";
+            item.errorCode = safeOptions.errorCode || "";
+            item.errorMessage = safeOptions.errorMessage || "Coordinate conversion failed.";
+
+            return item;
+        }
+
+        function buildSuccessItem(point, resolved, amapStatus, amapInfo) {
+            return {
+                deviceCode: point.deviceCode || "",
+                hasRawCoordinate: true,
+                hasMapCoordinate: true,
+                mapSource: point.mapSource || "amap_js_convert_from_baidu",
+                coordinateState: "available",
+                coordinateStateText: "Coordinate converted to GCJ-02.",
+                rawLongitude: point.rawLongitude ?? null,
+                rawLatitude: point.rawLatitude ?? null,
+                mapLongitude: resolved.mapLongitude,
+                mapLatitude: resolved.mapLatitude,
+                amapStatus: amapStatus || "complete",
+                amapInfo: amapInfo || "",
+                errorStage: "",
+                errorCode: "",
+                errorMessage: ""
+            };
+        }
+
+        function waitForDomReady() {
+            if (hostState.domReady || document.readyState !== "loading") {
+                hostState.domReady = true;
+                return Promise.resolve();
+            }
+
+            return new Promise((resolve) => {
+                document.addEventListener("DOMContentLoaded", () => {
+                    hostState.domReady = true;
+                    resolve();
+                }, { once: true });
+            });
         }
 
         function parseConfig(rawConfig) {
@@ -155,31 +231,41 @@
             return rawConfig;
         }
 
-        function parsePoints(rawJson) {
-            if (Array.isArray(rawJson)) {
-                return rawJson;
+        function parseBatchRequest(rawJson) {
+            const parsed = typeof rawJson === "string"
+                ? JSON.parse(rawJson)
+                : rawJson;
+
+            if (Array.isArray(parsed)) {
+                return {
+                    batchId: "",
+                    items: parsed
+                };
             }
 
-            if (typeof rawJson === "string") {
-                const text = rawJson.trim();
-                if (!text) {
-                    return [];
-                }
-
-                const parsed = JSON.parse(text);
-                return Array.isArray(parsed) ? parsed : [];
+            if (parsed && typeof parsed === "object" && Array.isArray(parsed.items)) {
+                return {
+                    batchId: typeof parsed.batchId === "string" ? parsed.batchId : "",
+                    items: parsed.items
+                };
             }
 
-            return [];
+            return {
+                batchId: "",
+                items: []
+            };
         }
 
-        async function ensureMapScript(config) {
+        async function loadAmapScript(config) {
             if (window.AMap && typeof window.AMap.convertFrom === "function") {
+                hostState.scriptLoaded = true;
+                hostState.hasAmap = true;
+                hostState.hasConvertFrom = true;
                 return;
             }
 
             if (!config || !config.jsKey) {
-                throw new Error("Missing AMap JS key.");
+                throw new Error("AMap JS key is missing.");
             }
 
             if (hostState.scriptLoadPromise) {
@@ -192,7 +278,9 @@
                 };
             }
 
-            postLog("CoordConv script load started", {
+            postLog("CoordConvHost script load started", {
+                hasJsKey: !!config.jsKey,
+                hasSecurityJsCode: !!config.securityJsCode,
                 jsApiVersion: config.jsApiVersion || "2.0"
             });
 
@@ -200,17 +288,39 @@
                 const script = document.createElement("script");
                 script.src = `https://webapi.amap.com/maps?v=${encodeURIComponent(config.jsApiVersion || "2.0")}&key=${encodeURIComponent(config.jsKey)}`;
                 script.onload = () => {
-                    postLog("CoordConv script load completed", {
-                        hasConvertFrom: !!(window.AMap && typeof window.AMap.convertFrom === "function")
+                    hostState.scriptLoaded = true;
+                    hostState.hasAmap = !!window.AMap;
+                    hostState.hasConvertFrom = !!(window.AMap && typeof window.AMap.convertFrom === "function");
+
+                    if (!hostState.hasConvertFrom) {
+                        const error = new Error("AMap JS SDK loaded without convertFrom.");
+                        postLog("CoordConvHost script load failed", {
+                            hasAmap: hostState.hasAmap,
+                            hasConvertFrom: hostState.hasConvertFrom,
+                            errorStage: "script_load",
+                            errorMessage: error.message
+                        }, "error");
+                        hostState.scriptLoadPromise = null;
+                        reject(error);
+                        return;
+                    }
+
+                    postLog("CoordConvHost script load completed", {
+                        hasAmap: hostState.hasAmap,
+                        hasConvertFrom: hostState.hasConvertFrom
                     });
                     resolve();
                 };
                 script.onerror = () => {
                     const error = new Error("Failed to load AMap JS SDK.");
-                    postLog("CoordConv script load failed", {
+                    hostState.scriptLoaded = false;
+                    hostState.hasAmap = false;
+                    hostState.hasConvertFrom = false;
+                    hostState.scriptLoadPromise = null;
+                    postLog("CoordConvHost script load failed", {
+                        errorStage: "script_load",
                         errorMessage: error.message
                     }, "error");
-                    hostState.scriptLoadPromise = null;
                     reject(error);
                 };
                 document.head.appendChild(script);
@@ -219,45 +329,107 @@
             return hostState.scriptLoadPromise;
         }
 
-        function normalizeLocations(result) {
-            if (Array.isArray(result?.locations)) {
-                return result.locations;
+        async function ensureReady(rawConfig) {
+            if (hostState.ready && hostState.hasConvertFrom) {
+                return createReadyPayload(true);
             }
 
-            if (typeof result?.locations === "string") {
-                const text = result.locations.trim();
+            if (hostState.readyPromise) {
+                return hostState.readyPromise;
+            }
+
+            const config = parseConfig(rawConfig || hostState.config || {});
+            hostState.config = config;
+
+            postLog("CoordConvHost ready started", {
+                hasJsKey: !!config.jsKey,
+                hasSecurityJsCode: !!config.securityJsCode,
+                jsApiVersion: config.jsApiVersion || "2.0"
+            });
+
+            hostState.readyPromise = (async () => {
+                await waitForDomReady();
+                await loadAmapScript(config);
+
+                hostState.ready = true;
+                hostState.readyError = "";
+                hostState.hasAmap = !!window.AMap;
+                hostState.hasConvertFrom = !!(window.AMap && typeof window.AMap.convertFrom === "function");
+
+                const payload = createReadyPayload(true);
+                postHostMessage("coord-conv-ready", payload);
+                postLog("CoordConvHost ready completed", {
+                    hasAmap: payload.hasAmap,
+                    hasConvertFrom: payload.hasConvertFrom
+                });
+
+                return payload;
+            })().catch((error) => {
+                const message = error && error.message
+                    ? error.message
+                    : "CoordConvHost ready failed.";
+                hostState.ready = false;
+                hostState.readyError = message;
+
+                const payload = createReadyPayload(false, "script_load", message);
+                postHostMessage("coord-conv-ready-failed", payload);
+                postLog("CoordConvHost ready failed", {
+                    errorStage: payload.errorStage,
+                    errorMessage: payload.errorMessage,
+                    hasAmap: payload.hasAmap,
+                    hasConvertFrom: payload.hasConvertFrom
+                }, "error");
+
+                return payload;
+            }).finally(() => {
+                if (!hostState.ready) {
+                    hostState.readyPromise = null;
+                }
+            });
+
+            return hostState.readyPromise;
+        }
+
+        function splitLocationString(text) {
+            if (text.includes("|")) {
+                return text.split("|").map((item) => item.trim()).filter(Boolean);
+            }
+
+            if (text.includes(";")) {
+                return text.split(";").map((item) => item.trim()).filter(Boolean);
+            }
+
+            return [text];
+        }
+
+        function normalizeLocations(rawLocations) {
+            if (Array.isArray(rawLocations)) {
+                return rawLocations;
+            }
+
+            if (rawLocations === null || rawLocations === undefined) {
+                return [];
+            }
+
+            if (typeof rawLocations === "string") {
+                const text = rawLocations.trim();
                 if (!text) {
                     return [];
                 }
 
-                if (text.includes("|")) {
-                    return text.split("|").map((item) => item.trim()).filter(Boolean);
+                const parsed = parseJsonMaybe(text);
+                if (Array.isArray(parsed)) {
+                    return parsed;
                 }
 
-                if (text.includes(";")) {
-                    return text.split(";").map((item) => item.trim()).filter(Boolean);
+                if (parsed && typeof parsed === "object") {
+                    return [parsed];
                 }
 
-                return [text];
+                return splitLocationString(text);
             }
 
-            if (result && result.locations) {
-                return [result.locations];
-            }
-
-            if (Array.isArray(result)) {
-                return result;
-            }
-
-            if (typeof result === "string") {
-                return [result];
-            }
-
-            if (result) {
-                return [result];
-            }
-
-            return [];
+            return [rawLocations];
         }
 
         function resolveStringLocation(value) {
@@ -266,24 +438,22 @@
                 throw new Error("AMap.convertFrom returned an empty location string.");
             }
 
-            const firstPair = text.split(";")[0];
-            const parts = firstPair.split(",");
+            const pair = text.split(";")[0];
+            const parts = pair.split(",");
             if (parts.length < 2) {
                 throw new Error("AMap.convertFrom returned an invalid location string.");
             }
 
-            const lng = toFiniteCoordinate(parts[0]);
-            const lat = toFiniteCoordinate(parts[1]);
-            if (lng === null || lat === null) {
+            const mapLongitude = toFiniteCoordinate(parts[0]);
+            const mapLatitude = toFiniteCoordinate(parts[1]);
+            if (mapLongitude === null || mapLatitude === null) {
                 throw new Error("AMap.convertFrom returned non-numeric coordinates.");
             }
 
             return {
-                lng: formatCoordinate(lng),
-                lat: formatCoordinate(lat),
-                resultLocationKind: "string",
-                resultLongitude: formatCoordinate(lng),
-                resultLatitude: formatCoordinate(lat)
+                mapLongitude: formatCoordinate(mapLongitude),
+                mapLatitude: formatCoordinate(mapLatitude),
+                resultLocationKind: "string"
             };
         }
 
@@ -292,67 +462,66 @@
                 return resolveStringLocation(location);
             }
 
-            const lng = typeof location?.getLng === "function"
+            const mapLongitude = typeof location?.getLng === "function"
                 ? location.getLng()
                 : Array.isArray(location)
                     ? location[0]
-                    : location?.lng;
-            const lat = typeof location?.getLat === "function"
+                    : location?.lng ?? location?.longitude;
+            const mapLatitude = typeof location?.getLat === "function"
                 ? location.getLat()
                 : Array.isArray(location)
                     ? location[1]
-                    : location?.lat;
+                    : location?.lat ?? location?.latitude;
 
-            if (!Number.isFinite(Number(lng)) || !Number.isFinite(Number(lat))) {
+            if (!Number.isFinite(Number(mapLongitude)) || !Number.isFinite(Number(mapLatitude))) {
                 throw new Error("AMap.convertFrom returned invalid coordinates.");
             }
 
             return {
-                lng: formatCoordinate(lng),
-                lat: formatCoordinate(lat),
-                resultLocationKind: resultKind(location),
-                resultLongitude: formatCoordinate(lng),
-                resultLatitude: formatCoordinate(lat)
+                mapLongitude: formatCoordinate(mapLongitude),
+                mapLatitude: formatCoordinate(mapLatitude),
+                resultLocationKind: valueKind(location)
             };
         }
 
         function validatePoint(point) {
-            const lng = toFiniteCoordinate(point.rawLongitude);
-            const lat = toFiniteCoordinate(point.rawLatitude);
+            const rawLongitude = toFiniteCoordinate(point.rawLongitude);
+            const rawLatitude = toFiniteCoordinate(point.rawLatitude);
 
-            if (lng === null || lat === null) {
+            if (rawLongitude === null || rawLatitude === null) {
                 return {
                     valid: false,
-                    failure: buildFailedPoint(point, {
-                        coordinateStateText: "原始坐标格式非法",
-                        coordinateWarning: "高德 JS 输入坐标不是有效数字。",
-                        errorStage: "input-validate",
+                    failure: buildFailedItem(point, {
+                        hasRawCoordinate: false,
+                        coordinateState: "failed",
+                        coordinateStateText: "Raw coordinate format is invalid.",
+                        errorStage: "payload_parse",
                         errorCode: "raw_coordinate_not_numeric",
                         errorMessage: "Input coordinates are not finite numbers."
                     })
                 };
             }
 
-            if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+            if (rawLatitude < -90 || rawLatitude > 90 || rawLongitude < -180 || rawLongitude > 180) {
                 return {
                     valid: false,
-                    failure: buildFailedPoint(point, {
-                        coordinateStateText: "原始坐标越界",
-                        coordinateWarning: "高德 JS 输入坐标超出范围。",
-                        errorStage: "input-validate",
+                    failure: buildFailedItem(point, {
+                        coordinateState: "failed",
+                        coordinateStateText: "Raw coordinate is out of range.",
+                        errorStage: "payload_parse",
                         errorCode: "raw_coordinate_out_of_range",
                         errorMessage: "Input coordinates are out of range."
                     })
                 };
             }
 
-            if (lng === 0 && lat === 0) {
+            if (rawLongitude === 0 && rawLatitude === 0) {
                 return {
                     valid: false,
-                    failure: buildFailedPoint(point, {
-                        coordinateStateText: "原始坐标为原点",
-                        coordinateWarning: "平台原始坐标为 0,0，当前不上图。",
-                        errorStage: "input-validate",
+                    failure: buildFailedItem(point, {
+                        coordinateState: "failed",
+                        coordinateStateText: "Raw coordinate is the 0,0 origin.",
+                        errorStage: "payload_parse",
                         errorCode: "raw_coordinate_origin",
                         errorMessage: "Input coordinates are the 0,0 origin."
                     })
@@ -361,254 +530,325 @@
 
             return {
                 valid: true,
-                lng,
-                lat
+                rawLongitude,
+                rawLatitude
             };
         }
 
-        function buildBatchFailure(points, errorStage, errorCode, errorMessage) {
-            return points.map((point) => {
-                postLog("AMap.convertFrom item failed", {
-                    deviceCode: point.deviceCode || "",
-                    errorStage,
-                    errorCode,
-                    errorMessage
-                }, "warning");
-
-                return buildFailedPoint(point, {
-                    coordinateStateText: "高德坐标转换返回失败",
-                    coordinateWarning: errorMessage,
-                    errorStage,
-                    errorCode,
-                    errorMessage
-                });
-            });
+        function buildBatchFailure(points, errorStage, errorCode, errorMessage, amapStatus, amapInfo) {
+            return (points || []).map((point) => buildFailedItem(point, {
+                coordinateState: "failed",
+                coordinateStateText: "Coordinate conversion failed.",
+                errorStage: errorStage || "unknown",
+                errorCode: errorCode || "",
+                errorMessage: errorMessage || "Coordinate conversion failed.",
+                amapStatus: amapStatus || "error",
+                amapInfo: amapInfo || ""
+            }));
         }
 
-        async function runBatchConversion(points, config) {
-            const ordered = Array.isArray(points) ? points : [];
+        async function runBatchConversion(request, config) {
+            const orderedPoints = Array.isArray(request.items) ? request.items : [];
+            const requestedCount = orderedPoints.length;
+            const batchId = request.batchId || "";
+            const itemsByIndex = new Array(requestedCount);
             const prepared = [];
-            const failuresByIndex = new Map();
 
-            ordered.forEach((point, index) => {
+            for (let index = 0; index < orderedPoints.length; index += 1) {
+                const point = orderedPoints[index] || {};
                 const validation = validatePoint(point);
                 if (!validation.valid) {
-                    failuresByIndex.set(index, validation.failure);
-                    postLog("AMap.convertFrom item failed", {
+                    itemsByIndex[index] = validation.failure;
+                    postLog("AMap.convertFrom item validation failed", {
+                        batchId,
                         deviceCode: point.deviceCode || "",
+                        rawLongitude: point.rawLongitude ?? "",
+                        rawLatitude: point.rawLatitude ?? "",
+                        mapSource: point.mapSource || "amap_js_convert_from_baidu",
+                        coordinateState: validation.failure.coordinateState,
                         errorStage: validation.failure.errorStage,
                         errorCode: validation.failure.errorCode,
                         errorMessage: validation.failure.errorMessage
                     }, "warning");
-                    return;
+                    continue;
                 }
 
                 prepared.push({
                     index,
                     point,
-                    lng: validation.lng,
-                    lat: validation.lat
+                    rawLongitude: validation.rawLongitude,
+                    rawLatitude: validation.rawLatitude
                 });
-            });
-
-            if (prepared.length === 0) {
-                const items = ordered.map((_, index) => failuresByIndex.get(index));
-                return buildEnvelope(items, [], ordered.length);
             }
 
-            return await new Promise((resolve) => {
-                const sourceLocations = prepared.map((item) => [item.lng, item.lat]);
+            if (prepared.length === 0) {
+                return createEnvelope(requestedCount, itemsByIndex, []);
+            }
+
+            const callbackResult = await new Promise((resolve) => {
+                let settled = false;
+                const timer = window.setTimeout(() => {
+                    if (settled) {
+                        return;
+                    }
+
+                    settled = true;
+                    postLog("AMap.convertFrom callback timeout", {
+                        batchId,
+                        requestedCount,
+                        callbackTimeoutMs: CallbackTimeoutMs
+                    }, "warning");
+                    resolve({
+                        timeout: true,
+                        status: "error",
+                        info: "callback timeout",
+                        result: null
+                    });
+                }, CallbackTimeoutMs);
+
                 try {
-                    window.AMap.convertFrom(sourceLocations, (config && config.rawCoordinateSystem) || "baidu", (status, result) => {
-                        const info = result && typeof result.info === "string"
-                            ? result.info.trim()
-                            : "";
-                        const locations = normalizeLocations(result);
-
-                        postLog("AMap.convertFrom callback received", {
-                            status: String(status || ""),
-                            info,
-                            resultKind: resultKind(result),
-                            locationCount: locations.length
-                        });
-
-                        if (status !== "complete") {
-                            const failures = buildBatchFailure(
-                                prepared.map((item) => item.point),
-                                "convert-from",
-                                "convert_from_failed",
-                                `status=${String(status || "unknown")}${info ? ` / ${info}` : ""}`);
-                            prepared.forEach((item, index) => failuresByIndex.set(item.index, failures[index]));
-                            resolve(buildEnvelope(
-                                ordered.map((_, index) => failuresByIndex.get(index)),
-                                [buildBatchError("convert-from", `status=${String(status || "unknown")}${info ? ` / ${info}` : ""}`, "convert_from_failed")],
-                                ordered.length));
+                    const sourceLocations = prepared.map((item) => [item.rawLongitude, item.rawLatitude]);
+                    window.AMap.convertFrom(sourceLocations, (config && config.rawCoordinateSystem) || DefaultRawCoordinateSystem, (status, result) => {
+                        if (settled) {
                             return;
                         }
 
-                        prepared.forEach((item, preparedIndex) => {
-                            const location = preparedIndex < locations.length ? locations[preparedIndex] : null;
-                            if (!location) {
-                                const failure = buildFailedPoint(item.point, {
-                                    coordinateStateText: "高德回传值非法",
-                                    coordinateWarning: "高德坐标转换结果缺失。",
-                                    errorStage: "result-parse",
-                                    errorCode: "missing_result_location",
-                                    errorMessage: "No converted location was returned for the current device.",
-                                    rawResultSnippet: trimSnippet(result, 300)
-                                });
-                                failuresByIndex.set(item.index, failure);
-                                postLog("AMap.convertFrom item failed", {
-                                    deviceCode: item.point.deviceCode || "",
-                                    errorStage: failure.errorStage,
-                                    errorCode: failure.errorCode,
-                                    errorMessage: failure.errorMessage
-                                }, "warning");
-                                return;
-                            }
-
-                            try {
-                                const resolvedLocation = resolveLocation(location);
-                                const success = buildAvailablePoint(item.point, resolvedLocation, String(status || ""), info);
-                                failuresByIndex.set(item.index, success);
-                                postLog("AMap.convertFrom item resolved", {
-                                    deviceCode: item.point.deviceCode || "",
-                                    inputLongitude: formatCoordinate(item.lng),
-                                    inputLatitude: formatCoordinate(item.lat),
-                                    outputLongitude: success.mapLongitude,
-                                    outputLatitude: success.mapLatitude,
-                                    resultLocationKind: success.resultLocationKind
-                                });
-                            } catch (error) {
-                                const failure = buildFailedPoint(item.point, {
-                                    coordinateStateText: "高德回传值非法",
-                                    coordinateWarning: error && error.message
-                                        ? error.message
-                                        : "高德坐标转换结果无效。",
-                                    errorStage: "result-parse",
-                                    errorCode: "result_location_invalid",
-                                    errorMessage: error && error.message
-                                        ? error.message
-                                        : "Failed to parse converted location.",
-                                    rawResultSnippet: trimSnippet(location, 300),
-                                    resultLocationKind: resultKind(location)
-                                });
-                                failuresByIndex.set(item.index, failure);
-                                postLog("AMap.convertFrom item failed", {
-                                    deviceCode: item.point.deviceCode || "",
-                                    errorStage: failure.errorStage,
-                                    errorCode: failure.errorCode,
-                                    errorMessage: failure.errorMessage
-                                }, "warning");
-                            }
+                        settled = true;
+                        window.clearTimeout(timer);
+                        resolve({
+                            timeout: false,
+                            status: String(status || ""),
+                            info: result && typeof result.info === "string" ? result.info.trim() : "",
+                            result
                         });
+                    });
+                } catch (error) {
+                    if (settled) {
+                        return;
+                    }
 
-                        resolve(buildEnvelope(
-                            ordered.map((_, index) => failuresByIndex.get(index)),
-                            [],
-                            ordered.length));
+                    settled = true;
+                    window.clearTimeout(timer);
+                    resolve({
+                        timeout: false,
+                        thrown: error
+                    });
+                }
+            });
+
+            if (callbackResult.thrown) {
+                const message = callbackResult.thrown && callbackResult.thrown.message
+                    ? callbackResult.thrown.message
+                    : "AMap.convertFrom threw an unexpected error.";
+                const failures = buildBatchFailure(prepared.map((item) => item.point), "convert_from", "convert_from_exception", message, "error", "");
+                prepared.forEach((item, index) => {
+                    itemsByIndex[item.index] = failures[index];
+                });
+
+                postLog("AMap.convertFrom threw before callback", {
+                    batchId,
+                    errorStage: "convert_from",
+                    errorCode: "convert_from_exception",
+                    errorMessage: message
+                }, "error");
+
+                return createEnvelope(requestedCount, itemsByIndex, [
+                    createBatchError("convert_from", message, "convert_from_exception")
+                ]);
+            }
+
+            const status = callbackResult.status || "";
+            const info = callbackResult.info || "";
+            const rawLocations = callbackResult.result && Object.prototype.hasOwnProperty.call(callbackResult.result, "locations")
+                ? callbackResult.result.locations
+                : callbackResult.result;
+            const locationsKind = valueKind(rawLocations);
+            const locations = normalizeLocations(rawLocations);
+
+            postLog("AMap.convertFrom callback received", {
+                batchId,
+                status,
+                info,
+                locationsKind,
+                locationCount: locations.length,
+                timeout: callbackResult.timeout ? "true" : "false"
+            });
+
+            if (callbackResult.timeout) {
+                const failures = buildBatchFailure(prepared.map((item) => item.point), "callback_timeout", "convert_from_timeout", "AMap.convertFrom callback timed out.", "error", info);
+                prepared.forEach((item, index) => {
+                    itemsByIndex[item.index] = failures[index];
+                });
+
+                return createEnvelope(requestedCount, itemsByIndex, [
+                    createBatchError("callback_timeout", "AMap.convertFrom callback timed out.", "convert_from_timeout")
+                ]);
+            }
+
+            if (status !== "complete") {
+                const failureMessage = info
+                    ? `AMap.convertFrom failed: ${info}`
+                    : "AMap.convertFrom did not return status=complete.";
+                const failures = buildBatchFailure(prepared.map((item) => item.point), "convert_from", "convert_from_failed", failureMessage, "error", info);
+                prepared.forEach((item, index) => {
+                    itemsByIndex[item.index] = failures[index];
+                });
+
+                return createEnvelope(requestedCount, itemsByIndex, [
+                    createBatchError("convert_from", failureMessage, "convert_from_failed")
+                ]);
+            }
+
+            prepared.forEach((item, preparedIndex) => {
+                const location = preparedIndex < locations.length ? locations[preparedIndex] : null;
+                if (location === null || location === undefined) {
+                    itemsByIndex[item.index] = buildFailedItem(item.point, {
+                        coordinateState: "failed",
+                        coordinateStateText: "AMap returned no converted coordinate.",
+                        amapStatus: "no_data",
+                        amapInfo: info,
+                        errorStage: "result_parse",
+                        errorCode: "missing_result_location",
+                        errorMessage: "No converted location was returned for the current device."
+                    });
+
+                    postLog("AMap.convertFrom item failed", {
+                        batchId,
+                        deviceCode: item.point.deviceCode || "",
+                        rawLongitude: formatCoordinate(item.rawLongitude),
+                        rawLatitude: formatCoordinate(item.rawLatitude),
+                        amapStatus: "no_data",
+                        amapInfo: info,
+                        errorStage: "result_parse",
+                        errorCode: "missing_result_location",
+                        errorMessage: "No converted location was returned for the current device."
+                    }, "warning");
+                    return;
+                }
+
+                try {
+                    const resolved = resolveLocation(location);
+                    itemsByIndex[item.index] = buildSuccessItem(item.point, resolved, "complete", info);
+                    postLog("AMap.convertFrom item resolved", {
+                        batchId,
+                        deviceCode: item.point.deviceCode || "",
+                        rawLongitude: formatCoordinate(item.rawLongitude),
+                        rawLatitude: formatCoordinate(item.rawLatitude),
+                        mapLongitude: resolved.mapLongitude,
+                        mapLatitude: resolved.mapLatitude,
+                        locationsKind,
+                        resultLocationKind: resolved.resultLocationKind,
+                        amapStatus: "complete",
+                        amapInfo: info
                     });
                 } catch (error) {
                     const message = error && error.message
                         ? error.message
-                        : "AMap.convertFrom threw an unexpected error.";
-                    const failures = buildBatchFailure(
-                        prepared.map((item) => item.point),
-                        "convert-throw",
-                        "convert_from_exception",
-                        message);
-                    prepared.forEach((item, index) => failuresByIndex.set(item.index, failures[index]));
-                    resolve(buildEnvelope(
-                        ordered.map((_, index) => failuresByIndex.get(index)),
-                        [buildBatchError("convert-throw", message, "convert_from_exception")],
-                        ordered.length));
+                        : "Failed to parse converted location.";
+                    itemsByIndex[item.index] = buildFailedItem(item.point, {
+                        coordinateState: "failed",
+                        coordinateStateText: "AMap returned an invalid converted coordinate.",
+                        amapStatus: "error",
+                        amapInfo: info,
+                        errorStage: "result_parse",
+                        errorCode: "result_location_invalid",
+                        errorMessage: message
+                    });
+
+                    postLog("AMap.convertFrom item failed", {
+                        batchId,
+                        deviceCode: item.point.deviceCode || "",
+                        rawLongitude: formatCoordinate(item.rawLongitude),
+                        rawLatitude: formatCoordinate(item.rawLatitude),
+                        amapStatus: "error",
+                        amapInfo: info,
+                        errorStage: "result_parse",
+                        errorCode: "result_location_invalid",
+                        errorMessage: message,
+                        rawResultSnippet: summarize(location)
+                    }, "warning");
                 }
             });
+
+            return createEnvelope(requestedCount, itemsByIndex, []);
         }
 
-        window.initializeCoordConvHost = async function(rawConfig) {
-            try {
-                const config = parseConfig(rawConfig);
-                hostState.config = config;
-
-                if (hostState.ready && window.AMap && typeof window.AMap.convertFrom === "function") {
-                    postHostMessage("coord-conv-ready", {
-                        ready: true
-                    });
-                    return JSON.stringify({
-                        type: "coord-conv-host-init",
-                        status: "ready"
-                    });
-                }
-
-                await ensureMapScript(config);
-                hostState.ready = true;
-                hostState.readyError = "";
-                window.coordConvReady = true;
-                postHostMessage("coord-conv-ready", {
-                    ready: true
-                });
-
-                return JSON.stringify({
-                    type: "coord-conv-host-init",
-                    status: "ready"
-                });
-            } catch (error) {
-                const message = error && error.message
-                    ? error.message
-                    : "CoordConv host initialization failed.";
-                hostState.ready = false;
-                hostState.readyError = message;
-                window.coordConvReady = false;
-                postHostMessage("coord-conv-ready-failed", {
-                    ready: false,
-                    message
-                });
-
-                return JSON.stringify({
-                    type: "coord-conv-host-init",
-                    status: "failed",
-                    message
-                });
-            }
+        window.__coordConvHost = {
+            ensureReady
         };
 
         window.convertBd09Batch = async function(rawJson, rawConfig) {
-            let requestedCount = 0;
+            let request;
 
             try {
-                const config = parseConfig(rawConfig || hostState.config || {});
-                hostState.config = config;
-                const points = parsePoints(rawJson);
-                requestedCount = points.length;
+                request = parseBatchRequest(rawJson);
+            } catch (error) {
+                const message = error && error.message
+                    ? error.message
+                    : "Failed to parse batch request payload.";
+                return JSON.stringify(createEnvelope(0, [], [
+                    createBatchError("payload_parse", message, "batch_request_invalid")
+                ]));
+            }
 
-                if (!hostState.ready || !window.AMap || typeof window.AMap.convertFrom !== "function") {
-                    await window.initializeCoordConvHost(config);
+            const batchId = request.batchId || "";
+            const requestedCount = Array.isArray(request.items) ? request.items.length : 0;
+            const startedAt = Date.now();
+            const config = parseConfig(rawConfig || hostState.config || {});
+            hostState.config = config;
+
+            postLog("AMap JS batch request started", {
+                batchId,
+                requestedCount,
+                functionName: "convertBd09Batch",
+                startedAt: new Date(startedAt).toISOString()
+            });
+
+            try {
+                const readyPayload = await ensureReady(config);
+                if (!readyPayload.ready) {
+                    const envelope = createEnvelope(
+                        requestedCount,
+                        buildBatchFailure(request.items, readyPayload.errorStage || "script_load", "coord_conv_host_not_ready", readyPayload.errorMessage || "CoordConvHost is not ready.", "error", ""),
+                        [createBatchError(readyPayload.errorStage || "script_load", readyPayload.errorMessage || "CoordConvHost is not ready.", "coord_conv_host_not_ready")]);
+                    return JSON.stringify(envelope);
                 }
 
-                if (!hostState.ready || !window.AMap || typeof window.AMap.convertFrom !== "function") {
-                    return JSON.stringify(buildEnvelope(
-                        buildBatchFailure(points, "host-ready", "coord_conv_host_not_ready", hostState.readyError || "CoordConv host is not ready."),
-                        [buildBatchError("host-ready", hostState.readyError || "CoordConv host is not ready.", "coord_conv_host_not_ready")],
-                        requestedCount));
-                }
-
-                const envelope = await runBatchConversion(points, config);
+                const envelope = await runBatchConversion(request, config);
+                postLog("AMap JS batch request completed", {
+                    batchId,
+                    requestedCount: envelope.requestedCount,
+                    successCount: envelope.successCount,
+                    failedCount: envelope.failedCount,
+                    durationMs: Date.now() - startedAt
+                });
                 return JSON.stringify(envelope);
             } catch (error) {
                 const message = error && error.message
                     ? error.message
                     : "Unexpected coord conversion host failure.";
-                return JSON.stringify(buildEnvelope(
-                    [],
-                    [buildBatchError("convert-batch", message, "convert_batch_failed")],
-                    requestedCount));
+                postLog("AMap JS batch request failed", {
+                    batchId,
+                    requestedCount,
+                    errorStage: "convert_from",
+                    errorCode: "convert_batch_failed",
+                    errorMessage: message,
+                    durationMs: Date.now() - startedAt
+                }, "error");
+
+                return JSON.stringify(createEnvelope(
+                    requestedCount,
+                    buildBatchFailure(request.items, "convert_from", "convert_batch_failed", message, "error", ""),
+                    [createBatchError("convert_from", message, "convert_batch_failed")]));
             }
         };
 
         window.addEventListener("DOMContentLoaded", () => {
-            window.coordConvReady = false;
+            hostState.domReady = true;
             postHostMessage("coord-conv-host-loaded", {
+                loaded: true
+            });
+            postLog("CoordConvHost DOM loaded", {
                 loaded: true
             });
         });

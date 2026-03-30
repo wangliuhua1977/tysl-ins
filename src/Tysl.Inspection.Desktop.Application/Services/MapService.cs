@@ -43,21 +43,44 @@ public sealed class MapService(
                 logger.LogInformation(
                     "Coordinate render cache write started. DeviceCount={DeviceCount}.",
                     changedCacheDevices.Length);
+                foreach (var device in changedCacheDevices)
+                {
+                    logger.LogInformation(
+                        "Coordinate render cache write item prepared. DeviceCode={DeviceCode}, RawLongitude={RawLongitude}, RawLatitude={RawLatitude}, MapLongitude={MapLongitude}, MapLatitude={MapLatitude}, CoordinateState={CoordinateState}.",
+                        device.DeviceCode,
+                        device.RawLongitude ?? "null",
+                        device.RawLatitude ?? "null",
+                        device.MapLongitude ?? "null",
+                        device.MapLatitude ?? "null",
+                        device.CoordinateStatus);
+                }
                 await groupSyncStore.UpdateDevicePlatformDataAsync(changedCacheDevices, cancellationToken);
                 logger.LogInformation(
                     "Coordinate render cache write completed. DeviceCount={DeviceCount}.",
                     changedCacheDevices.Length);
+                foreach (var device in changedCacheDevices)
+                {
+                    logger.LogInformation(
+                        "Coordinate render cache write item completed. DeviceCode={DeviceCode}, MapLongitude={MapLongitude}, MapLatitude={MapLatitude}, CoordinateState={CoordinateState}, CacheWriteSucceeded={CacheWriteSucceeded}.",
+                        device.DeviceCode,
+                        device.MapLongitude ?? "null",
+                        device.MapLatitude ?? "null",
+                        device.CoordinateStatus,
+                        true);
+                }
             }
 
             var stats = MapCoordinateStats.FromDevices(devicesWithProjectionCache);
 
             logger.LogInformation(
-                "Map coordinate load completed. RenderedCount={RenderedCount}, UnmappedCount={UnmappedCount}, MissingCount={MissingCount}, RateLimitedCount={RateLimitedCount}, FailedCount={FailedCount}.",
+                "Map coordinate load completed. RenderedCount={RenderedCount}, UnmappedCount={UnmappedCount}, MissingCount={MissingCount}, RateLimitedCount={RateLimitedCount}, FailedCount={FailedCount}, RenderedDeviceCodes={RenderedDeviceCodes}, UnmappedSummary={UnmappedSummary}.",
                 stats.RenderedCount,
                 stats.UnmappedCount,
                 stats.MissingCount,
                 stats.RateLimitedCount,
-                stats.FailedCount);
+                stats.FailedCount,
+                BuildDeviceCodeSummary(devicesWithProjectionCache.Where(HasValidMapCoordinate).Select(device => device.DeviceCode)),
+                BuildUnmappedSummary(devicesWithProjectionCache));
 
             return new MapLoadResult(true, string.Empty, devicesWithProjectionCache)
             {
@@ -87,7 +110,7 @@ public sealed class MapService(
                 {
                     MapLatitude = projection.HasMapCoordinate ? projection.MapLatitude : null,
                     MapLongitude = projection.HasMapCoordinate ? projection.MapLongitude : null,
-                    CoordinateSource = projection.HasMapCoordinate
+                    CoordinateSource = projection.HasRawCoordinate
                         ? "amap_js_convert_from_baidu"
                         : device.CoordinateSource,
                     CoordinateStatus = projection.CoordinateState,
@@ -104,6 +127,34 @@ public sealed class MapService(
                || !string.Equals(original.CoordinateSource, updated.CoordinateSource, StringComparison.Ordinal)
                || !string.Equals(original.CoordinateStatus, updated.CoordinateStatus, StringComparison.Ordinal)
                || !string.Equals(original.CoordinateStatusMessage, updated.CoordinateStatusMessage, StringComparison.Ordinal);
+    }
+
+    private static bool HasValidMapCoordinate(InspectionDevice device)
+    {
+        return !string.IsNullOrWhiteSpace(device.MapLatitude)
+               && !string.IsNullOrWhiteSpace(device.MapLongitude);
+    }
+
+    private static string BuildDeviceCodeSummary(IEnumerable<string> deviceCodes)
+    {
+        var codes = deviceCodes
+            .Where(code => !string.IsNullOrWhiteSpace(code))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(20)
+            .ToArray();
+
+        return codes.Length == 0 ? "<none>" : string.Join(", ", codes);
+    }
+
+    private static string BuildUnmappedSummary(IEnumerable<InspectionDevice> devices)
+    {
+        var summary = devices
+            .Where(device => !HasValidMapCoordinate(device))
+            .Select(device => $"{device.DeviceCode}:{device.CoordinateStatus}")
+            .Take(20)
+            .ToArray();
+
+        return summary.Length == 0 ? "<none>" : string.Join(" | ", summary);
     }
 
     private static string BuildSqliteMessage(Exception exception)

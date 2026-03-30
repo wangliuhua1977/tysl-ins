@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
@@ -15,11 +16,14 @@ public sealed class AmapCoordProjector(
     ILogger<AmapCoordProjector> logger) : ICoordinateProjectionService, IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private static readonly HashSet<string> SupportedProtocolVersions = new(StringComparer.Ordinal) { "1.0", "1.1" };
 
     private const string ProtocolType = "coord-conversion-batch";
+    private const string ProtocolVersion = "1.0";
+    private const string ReadyProtocolType = "coord-conv-ready";
+    private const string ReadyProtocolVersion = "1.0";
+    private const string BatchFunctionName = "convertBd09Batch";
     private const int MaxBatchSize = 40;
-    private const int PayloadSummaryLimit = 1000;
+    private const int PayloadSummaryLimit = 300;
     private static readonly TimeSpan HostReadyTimeout = TimeSpan.FromSeconds(15);
 
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -135,9 +139,13 @@ public sealed class AmapCoordProjector(
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
+                var batchId = $"coord-batch-{Guid.NewGuid():N}";
+                var startedAt = DateTimeOffset.Now;
+                var stopwatch = Stopwatch.StartNew();
                 var skippedCount = results.Count - cachedRenderCount;
                 logger.LogInformation(
-                    "AMap JS projection candidate batch built. TotalCount={TotalCount}, DirectRenderableCount={DirectRenderableCount}, BaiduCandidateCount={BaiduCandidateCount}, SkippedCount={SkippedCount}, BatchIndex={BatchIndex}, BatchSize={BatchSize}, BatchDeviceCodes={BatchDeviceCodes}.",
+                    "AMap JS projection candidate batch built. BatchId={BatchId}, TotalCount={TotalCount}, DirectRenderableCount={DirectRenderableCount}, BaiduCandidateCount={BaiduCandidateCount}, SkippedCount={SkippedCount}, BatchIndex={BatchIndex}, BatchSize={BatchSize}, BatchDeviceCodes={BatchDeviceCodes}.",
+                    batchId,
                     items.Length,
                     cachedRenderCount,
                     conversionCandidates.Count,
@@ -145,31 +153,46 @@ public sealed class AmapCoordProjector(
                     batch.Index,
                     batch.Items.Length,
                     string.Join(", ", batch.Items.Select(item => item.DeviceCode)));
-                logger.LogInformation(
-                    "AMap JS projection input summary. BatchIndex={BatchIndex}, Inputs={Inputs}.",
-                    batch.Index,
-                    string.Join(" | ", batch.Items.Select(item => $"{item.DeviceCode}:{item.RawLongitude ?? "null"},{item.RawLatitude ?? "null"}")));
+                foreach (var batchItem in batch.Items)
+                {
+                    logger.LogInformation(
+                        "AMap JS projection request item. BatchId={BatchId}, DeviceCode={DeviceCode}, RawLongitude={RawLongitude}, RawLatitude={RawLatitude}, MapSource={MapSource}, CoordinateState={CoordinateState}.",
+                        batchId,
+                        batchItem.DeviceCode,
+                        batchItem.RawLongitude ?? "null",
+                        batchItem.RawLatitude ?? "null",
+                        "amap_js_convert_from_baidu",
+                        CoordinateStateCatalog.Available);
+                }
 
-                var pointsJson = JsonSerializer.Serialize(
-                    batch.Items.Select(item => new
+                var requestJson = JsonSerializer.Serialize(
+                    new
                     {
-                        deviceCode = item.DeviceCode,
-                        rawLatitude = item.RawLatitude ?? string.Empty,
-                        rawLongitude = item.RawLongitude ?? string.Empty
-                    }),
+                        batchId,
+                        items = batch.Items.Select(item => new
+                        {
+                            deviceCode = item.DeviceCode,
+                            rawLatitude = item.RawLatitude ?? string.Empty,
+                            rawLongitude = item.RawLongitude ?? string.Empty,
+                            mapSource = "amap_js_convert_from_baidu",
+                            coordinateState = CoordinateStateCatalog.Available
+                        })
+                    },
                     JsonOptions);
                 var script = $$"""
                     (async () => {
-                        return await window.convertBd09Batch({{pointsJson}}, {{configJson}});
+                        return await window.convertBd09Batch({{requestJson}}, {{configJson}});
                     })()
                     """;
 
                 logger.LogInformation(
-                    "AMap JS projection request dispatched. BatchIndex={BatchIndex}, CandidateCount={CandidateCount}, RawScriptLength={RawScriptLength}, FunctionName={FunctionName}.",
+                    "AMap JS projection request dispatched. BatchId={BatchId}, BatchIndex={BatchIndex}, CandidateCount={CandidateCount}, FunctionName={FunctionName}, StartedAt={StartedAt}, RawScriptLength={RawScriptLength}.",
+                    batchId,
                     batch.Index,
                     batch.Items.Length,
-                    script.Length,
-                    "convertBd09Batch");
+                    BatchFunctionName,
+                    startedAt,
+                    script.Length);
 
                 string responseJson;
                 try
@@ -180,7 +203,8 @@ public sealed class AmapCoordProjector(
                 {
                     logger.LogWarning(
                         exception,
-                        "AMap JS projection payload invalid. InvalidReason={InvalidReason}, PayloadSummary={PayloadSummary}.",
+                        "AMap JS projection ExecuteScriptAsync failed. BatchId={BatchId}, InvalidReason={InvalidReason}, FailureMessage={FailureMessage}.",
+                        batchId,
                         "execute_script_failed",
                         exception.Message);
 
@@ -192,22 +216,30 @@ public sealed class AmapCoordProjector(
                     continue;
                 }
 
-                logger.LogInformation(
-                    "AMap JS projection raw payload received. ResponseLength={ResponseLength}, PayloadSummary={PayloadSummary}.",
-                    responseJson?.Length ?? 0,
-                    SummarizePayload(responseJson));
-
+                ScriptTransportInfo transportInfo;
                 ProjectionBatchPayload batchPayload;
                 try
                 {
-                    batchPayload = ParseBatchPayload(responseJson!);
+                    transportInfo = UnwrapExecuteScriptResult(responseJson!);
+                    logger.LogInformation(
+                        "WebView2 ExecuteScriptAsync payload received. BatchId={BatchId}, ResponseLength={ResponseLength}, RawSummary={RawSummary}, UnwrappedSummary={UnwrappedSummary}.",
+                        batchId,
+                        transportInfo.RawResponseLength,
+                        transportInfo.RawSummary,
+                        transportInfo.UnwrappedSummary);
+                    batchPayload = ParseBatchPayload(transportInfo);
                 }
                 catch (Exception exception)
                 {
+                    var invalidReason = $"{ClassifyPayloadKind(responseJson)}:{exception.Message}";
+                    var rawSummary = SummarizePayload(responseJson);
+                    var unwrappedSummary = TrySummarizeUnwrappedPayload(responseJson);
                     logger.LogWarning(
-                        "AMap JS projection payload invalid. InvalidReason={InvalidReason}, PayloadSummary={PayloadSummary}.",
-                        $"{ClassifyPayloadKind(responseJson)}:{exception.Message}",
-                        SummarizePayload(responseJson));
+                        "AMap JS projection payload invalid. BatchId={BatchId}, InvalidReason={InvalidReason}, RawPayloadSummary={RawPayloadSummary}, UnwrappedPayloadSummary={UnwrappedPayloadSummary}.",
+                        batchId,
+                        invalidReason,
+                        rawSummary,
+                        unwrappedSummary);
 
                     foreach (var item in batch.Items)
                     {
@@ -218,16 +250,21 @@ public sealed class AmapCoordProjector(
                 }
 
                 logger.LogInformation(
-                    "AMap JS projection envelope parsed. RequestedCount={RequestedCount}, SuccessCount={SuccessCount}, FailedCount={FailedCount}, ErrorCount={ErrorCount}.",
+                    "AMap JS projection envelope parsed. BatchId={BatchId}, Type={Type}, ProtocolVersion={ProtocolVersion}, RequestedCount={RequestedCount}, SuccessCount={SuccessCount}, FailedCount={FailedCount}, ItemCount={ItemCount}, ErrorCount={ErrorCount}.",
+                    batchId,
+                    batchPayload.Type,
+                    batchPayload.ProtocolVersion,
                     batchPayload.RequestedCount,
                     batchPayload.SuccessCount,
                     batchPayload.FailedCount,
+                    batchPayload.Items.Count,
                     batchPayload.ErrorCount);
 
                 if (batchPayload.Errors.Count > 0)
                 {
                     logger.LogWarning(
-                        "AMap JS projection payload contains errors. ErrorSummary={ErrorSummary}.",
+                        "AMap JS projection payload contains errors. BatchId={BatchId}, ErrorSummary={ErrorSummary}.",
+                        batchId,
                         string.Join(" | ", batchPayload.Errors.Select(error => $"{error.Stage}:{error.ErrorCode}:{error.DeviceCode ?? "<none>"}:{error.Message}")));
                 }
 
@@ -241,11 +278,15 @@ public sealed class AmapCoordProjector(
                     {
                         results[item.DeviceCode] = BuildFailedResult(item, "The current device is missing from the WebView2 payload.", "地图未收到转换结果");
                         logger.LogWarning(
-                            "AMap JS projection item parsed. DeviceCode={DeviceCode}, CoordinateState={CoordinateState}, MapLongitude={MapLongitude}, MapLatitude={MapLatitude}, ErrorStage={ErrorStage}, ErrorCode={ErrorCode}, ErrorMessage={ErrorMessage}.",
+                            "AMap JS projection item parsed. BatchId={BatchId}, DeviceCode={DeviceCode}, RawLongitude={RawLongitude}, RawLatitude={RawLatitude}, MapLongitude={MapLongitude}, MapLatitude={MapLatitude}, CoordinateState={CoordinateState}, AmapStatus={AmapStatus}, ErrorStage={ErrorStage}, ErrorCode={ErrorCode}, ErrorMessage={ErrorMessage}.",
+                            batchId,
                             item.DeviceCode,
+                            item.RawLongitude ?? "null",
+                            item.RawLatitude ?? "null",
+                            "null",
+                            "null",
                             CoordinateStateCatalog.Failed,
-                            "null",
-                            "null",
+                            "error",
                             "payload-lookup",
                             "item_missing",
                             "The current device is missing from the WebView2 payload.");
@@ -255,22 +296,42 @@ public sealed class AmapCoordProjector(
                     var result = ToResult(item, payload);
                     results[item.DeviceCode] = result;
                     logger.LogInformation(
-                        "AMap JS projection item parsed. DeviceCode={DeviceCode}, CoordinateState={CoordinateState}, MapLongitude={MapLongitude}, MapLatitude={MapLatitude}, ErrorStage={ErrorStage}, ErrorCode={ErrorCode}, ErrorMessage={ErrorMessage}.",
+                        "AMap JS projection item parsed. BatchId={BatchId}, DeviceCode={DeviceCode}, RawLongitude={RawLongitude}, RawLatitude={RawLatitude}, MapLongitude={MapLongitude}, MapLatitude={MapLatitude}, CoordinateState={CoordinateState}, AmapStatus={AmapStatus}, ErrorStage={ErrorStage}, ErrorCode={ErrorCode}, ErrorMessage={ErrorMessage}.",
+                        batchId,
                         item.DeviceCode,
-                        result.CoordinateState,
+                        payload.RawLongitude ?? item.RawLongitude ?? "null",
+                        payload.RawLatitude ?? item.RawLatitude ?? "null",
                         result.MapLongitude ?? "null",
                         result.MapLatitude ?? "null",
+                        result.CoordinateState,
+                        payload.AmapStatus ?? string.Empty,
                         payload.ErrorStage ?? string.Empty,
                         payload.ErrorCode ?? string.Empty,
                         payload.ErrorMessage ?? string.Empty);
                 }
+
+                stopwatch.Stop();
+                logger.LogInformation(
+                    "AMap JS projection request completed. BatchId={BatchId}, BatchIndex={BatchIndex}, RequestedCount={RequestedCount}, SuccessCount={SuccessCount}, FailedCount={FailedCount}, DurationMilliseconds={DurationMilliseconds}, CompletedAt={CompletedAt}.",
+                    batchId,
+                    batch.Index,
+                    batch.Items.Length,
+                    batchPayload.SuccessCount,
+                    batchPayload.FailedCount,
+                    stopwatch.ElapsedMilliseconds,
+                    DateTimeOffset.Now);
             }
 
+            var resultStats = BuildProjectionStats(results.Values);
             logger.LogInformation(
-                "BD-09 to GCJ-02 projection completed. RenderedCount={RenderedCount}, FailedCount={FailedCount}, CachedRenderCount={CachedRenderCount}.",
-                results.Values.Count(item => item.HasMapCoordinate),
-                results.Values.Count(item => string.Equals(item.CoordinateState, CoordinateStateCatalog.Failed, StringComparison.OrdinalIgnoreCase)),
-                cachedRenderCount);
+                "BD-09 to GCJ-02 projection completed. RenderedCount={RenderedCount}, MissingCount={MissingCount}, RateLimitedCount={RateLimitedCount}, FailedCount={FailedCount}, CachedRenderCount={CachedRenderCount}, RenderedDeviceCodes={RenderedDeviceCodes}, UnmappedSummary={UnmappedSummary}.",
+                resultStats.RenderedCount,
+                resultStats.MissingCount,
+                resultStats.RateLimitedCount,
+                resultStats.FailedCount,
+                cachedRenderCount,
+                BuildDeviceCodeSummary(results.Where(pair => pair.Value.HasMapCoordinate).Select(pair => pair.Key)),
+                BuildUnmappedSummary(results));
 
             return results;
         }
@@ -324,8 +385,50 @@ public sealed class AmapCoordProjector(
 
     internal static ProjectionBatchPayload ParseBatchPayload(string responseJson)
     {
-        var normalizedJson = NormalizeScriptResultJson(responseJson, out var transportRootKind);
-        using var document = JsonDocument.Parse(normalizedJson);
+        return ParseBatchPayload(UnwrapExecuteScriptResult(responseJson));
+    }
+
+    internal static HostReadyPayload ParseHostReadyPayload(string responseJson)
+    {
+        var transport = UnwrapExecuteScriptResult(responseJson);
+        using var document = JsonDocument.Parse(transport.UnwrappedJson);
+        var root = document.RootElement;
+
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException($"Expected a JSON object ready payload but received {root.ValueKind}.");
+        }
+
+        var type = ReadString(root, "type") ?? string.Empty;
+        var version = ReadString(root, "protocolVersion") ?? string.Empty;
+        if (!string.Equals(type, ReadyProtocolType, StringComparison.Ordinal) || !string.Equals(version, ReadyProtocolVersion, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"Invalid ready protocol. Type={type}, ProtocolVersion={version}.");
+        }
+
+        if (!TryReadBool(root, "ready", out var ready, out var readyError))
+        {
+            throw new InvalidOperationException(readyError ?? "Ready payload is missing ready.");
+        }
+
+        return new HostReadyPayload(
+            type,
+            version,
+            ready,
+            ReadBool(root, "scriptLoaded"),
+            ReadBool(root, "hasAmap"),
+            ReadBool(root, "hasConvertFrom"),
+            ReadString(root, "errorStage"),
+            ReadString(root, "errorMessage"),
+            transport.TransportRootKind,
+            transport.RawResponseLength,
+            transport.RawSummary,
+            transport.UnwrappedSummary);
+    }
+
+    private static ProjectionBatchPayload ParseBatchPayload(ScriptTransportInfo transport)
+    {
+        using var document = JsonDocument.Parse(transport.UnwrappedJson);
         var root = document.RootElement;
 
         if (root.ValueKind != JsonValueKind.Object)
@@ -335,7 +438,7 @@ public sealed class AmapCoordProjector(
 
         var type = ReadString(root, "type") ?? string.Empty;
         var version = ReadString(root, "protocolVersion") ?? string.Empty;
-        if (!string.Equals(type, ProtocolType, StringComparison.Ordinal) || !SupportedProtocolVersions.Contains(version))
+        if (!string.Equals(type, ProtocolType, StringComparison.Ordinal) || !string.Equals(version, ProtocolVersion, StringComparison.Ordinal))
         {
             throw new InvalidOperationException($"Invalid envelope protocol. Type={type}, ProtocolVersion={version}.");
         }
@@ -362,9 +465,11 @@ public sealed class AmapCoordProjector(
             ReadInt(root, "requestedCount"),
             ReadInt(root, "successCount"),
             ReadInt(root, "failedCount"),
-            ReadInt(root, "missingCount"),
             ReadInt(root, "errorCount"),
-            transportRootKind,
+            transport.TransportRootKind,
+            transport.RawResponseLength,
+            transport.RawSummary,
+            transport.UnwrappedSummary,
             items,
             errors);
     }
@@ -376,7 +481,7 @@ public sealed class AmapCoordProjector(
             var payload = ParseBatchPayload(responseJson);
             return string.Create(
                 CultureInfo.InvariantCulture,
-                $"transport={payload.TransportRootKind},type={payload.Type},protocolVersion={payload.ProtocolVersion},requested={payload.RequestedCount},items={payload.Items.Count},success={payload.SuccessCount},failed={payload.FailedCount},missing={payload.MissingCount},errors={payload.ErrorCount}");
+                $"transport={payload.TransportRootKind},type={payload.Type},protocolVersion={payload.ProtocolVersion},requested={payload.RequestedCount},items={payload.Items.Count},success={payload.SuccessCount},failed={payload.FailedCount},errors={payload.ErrorCount}");
         }
         catch
         {
@@ -436,6 +541,30 @@ public sealed class AmapCoordProjector(
         return "too_many_string_wrappers";
     }
 
+    internal static ScriptTransportInfo UnwrapExecuteScriptResult(string responseJson)
+    {
+        var normalizedJson = NormalizeScriptResultJson(responseJson, out var transportRootKind);
+        return new ScriptTransportInfo(
+            responseJson,
+            normalizedJson,
+            transportRootKind,
+            responseJson?.Length ?? 0,
+            SummarizePayload(responseJson),
+            SummarizePayload(normalizedJson));
+    }
+
+    internal static string TrySummarizeUnwrappedPayload(string responseJson)
+    {
+        try
+        {
+            return UnwrapExecuteScriptResult(responseJson).UnwrappedSummary;
+        }
+        catch (Exception exception)
+        {
+            return $"<unwrap-failed:{exception.Message}>";
+        }
+    }
+
     private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
     {
         if (webView is not null)
@@ -456,6 +585,12 @@ public sealed class AmapCoordProjector(
             {
                 throw new FileNotFoundException("CoordConvHost.html not found.", htmlPath);
             }
+
+            logger.LogInformation(
+                "CoordConv host load started. HtmlPath={HtmlPath}, HasJsKey={HasJsKey}, HasSecurityJsCode={HasSecurityJsCode}.",
+                htmlPath,
+                mapOptions.HasJsKey(),
+                !string.IsNullOrWhiteSpace(mapOptions.SecurityJsCode));
 
             var navigationTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var localWebView = new WebView2();
@@ -492,6 +627,8 @@ public sealed class AmapCoordProjector(
             await navigationTcs.Task.WaitAsync(cancellationToken);
             window.Hide();
 
+            logger.LogInformation("CoordConv host load completed. HtmlPath={HtmlPath}.", htmlPath);
+
             hostReady = false;
             hostWindow = window;
             webView = localWebView;
@@ -506,22 +643,42 @@ public sealed class AmapCoordProjector(
         }
 
         hostReadyTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var readySignal = hostReadyTcs;
         logger.LogInformation(
             "CoordConv host ready wait started. TimeoutMilliseconds={TimeoutMilliseconds}.",
             (int)HostReadyTimeout.TotalMilliseconds);
 
         var script = $$"""
             (async () => {
-                return await window.initializeCoordConvHost({{configJson}});
+                return await window.__coordConvHost.ensureReady({{configJson}});
             })()
             """;
-        await ExecuteScriptAsync(script);
+        var responseJson = await ExecuteScriptAsync(script);
+        var readyPayload = ParseHostReadyPayload(responseJson);
+        logger.LogInformation(
+            "CoordConv host ready payload parsed. Type={Type}, ProtocolVersion={ProtocolVersion}, Ready={Ready}, ScriptLoaded={ScriptLoaded}, HasAmap={HasAmap}, HasConvertFrom={HasConvertFrom}, RawPayloadSummary={RawPayloadSummary}, UnwrappedPayloadSummary={UnwrappedPayloadSummary}.",
+            readyPayload.Type,
+            readyPayload.ProtocolVersion,
+            readyPayload.Ready,
+            readyPayload.ScriptLoaded,
+            readyPayload.HasAmap,
+            readyPayload.HasConvertFrom,
+            readyPayload.RawSummary,
+            readyPayload.UnwrappedSummary);
+
+        if (!readyPayload.Ready)
+        {
+            throw new InvalidOperationException(readyPayload.ErrorMessage ?? "CoordConv host initialization failed.");
+        }
+
+        hostReady = true;
+        hostReadyTcs?.TrySetResult(true);
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(HostReadyTimeout);
         try
         {
-            await hostReadyTcs.Task.WaitAsync(timeoutCts.Token);
+            await readySignal.Task.WaitAsync(timeoutCts.Token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -565,14 +722,22 @@ public sealed class AmapCoordProjector(
             {
                 case "coord-conv-ready":
                     hostReady = true;
-                    logger.LogInformation("CoordConv host ready received. Ready={Ready}.", true);
+                    logger.LogInformation(
+                        "CoordConv host ready received. Ready={Ready}, ScriptLoaded={ScriptLoaded}, HasAmap={HasAmap}, HasConvertFrom={HasConvertFrom}.",
+                        true,
+                        ReadString(root, "scriptLoaded") ?? "true",
+                        ReadString(root, "hasAmap") ?? "true",
+                        ReadString(root, "hasConvertFrom") ?? "true");
                     hostReadyTcs?.TrySetResult(true);
                     break;
                 case "coord-conv-ready-failed":
                 {
                     hostReady = false;
-                    var message = ReadString(root, "message") ?? "CoordConv host initialization failed.";
-                    logger.LogWarning("CoordConv host ready failed. Message={Message}.", message);
+                    var message = ReadString(root, "errorMessage") ?? "CoordConv host initialization failed.";
+                    logger.LogWarning(
+                        "CoordConv host ready failed. ErrorStage={ErrorStage}, Message={Message}.",
+                        ReadString(root, "errorStage") ?? "script_load",
+                        message);
                     hostReadyTcs?.TrySetException(new InvalidOperationException(message));
                     break;
                 }
@@ -616,20 +781,34 @@ public sealed class AmapCoordProjector(
         string[] propertyNames =
         [
             "deviceCode",
+            "batchId",
             "batchIndex",
+            "requestedCount",
+            "successCount",
+            "failedCount",
+            "functionName",
+            "startedAt",
+            "durationMs",
+            "rawLongitude",
+            "rawLatitude",
+            "mapLongitude",
+            "mapLatitude",
+            "mapSource",
+            "coordinateState",
             "status",
             "info",
-            "resultKind",
+            "locationsKind",
             "locationCount",
-            "inputLongitude",
-            "inputLatitude",
-            "outputLongitude",
-            "outputLatitude",
             "resultLocationKind",
+            "amapStatus",
+            "amapInfo",
             "errorStage",
             "errorCode",
             "errorMessage",
             "jsApiVersion",
+            "hasJsKey",
+            "hasSecurityJsCode",
+            "hasAmap",
             "hasConvertFrom"
         ];
 
@@ -680,6 +859,60 @@ public sealed class AmapCoordProjector(
                 : "Coordinate conversion or parsing failed.";
         var stateText = !string.IsNullOrWhiteSpace(payload.CoordinateStateText) ? payload.CoordinateStateText : "坐标转换或解析失败";
         return BuildFailedResult(request, warning, stateText);
+    }
+
+    private static ProjectionStats BuildProjectionStats(IEnumerable<CoordinateProjectionResult> results)
+    {
+        var renderedCount = 0;
+        var missingCount = 0;
+        var rateLimitedCount = 0;
+        var failedCount = 0;
+
+        foreach (var result in results)
+        {
+            if (result.HasMapCoordinate)
+            {
+                renderedCount++;
+                continue;
+            }
+
+            switch (NormalizeState(result.CoordinateState))
+            {
+                case CoordinateStateCatalog.Missing:
+                    missingCount++;
+                    break;
+                case CoordinateStateCatalog.RateLimited:
+                    rateLimitedCount++;
+                    break;
+                default:
+                    failedCount++;
+                    break;
+            }
+        }
+
+        return new ProjectionStats(renderedCount, missingCount, rateLimitedCount, failedCount);
+    }
+
+    private static string BuildDeviceCodeSummary(IEnumerable<string> deviceCodes)
+    {
+        var codes = deviceCodes
+            .Where(code => !string.IsNullOrWhiteSpace(code))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(20)
+            .ToArray();
+
+        return codes.Length == 0 ? "<none>" : string.Join(", ", codes);
+    }
+
+    private static string BuildUnmappedSummary(IReadOnlyDictionary<string, CoordinateProjectionResult> results)
+    {
+        var items = results
+            .Where(pair => !pair.Value.HasMapCoordinate)
+            .Select(pair => $"{pair.Key}:{pair.Value.CoordinateState}")
+            .Take(20)
+            .ToArray();
+
+        return items.Length == 0 ? "<none>" : string.Join(" | ", items);
     }
 
     private static CoordinateProjectionResult BuildCachedMapResult(CoordinateProjectionRequest request)
@@ -898,6 +1131,7 @@ public sealed class AmapCoordProjector(
             deviceCode,
             hasRawCoordinate,
             hasMapCoordinate,
+            ReadString(itemElement, "mapSource"),
             ReadString(itemElement, "coordinateState"),
             ReadString(itemElement, "coordinateStateText"),
             ReadString(itemElement, "coordinateWarning"),
@@ -905,12 +1139,12 @@ public sealed class AmapCoordProjector(
             ReadString(itemElement, "rawLongitude"),
             ReadString(itemElement, "mapLatitude"),
             ReadString(itemElement, "mapLongitude"),
-            ReadStringAny(itemElement, "errorStage", "failureStage"),
-            ReadStringAny(itemElement, "errorCode", "failureReasonCode"),
-            ReadStringAny(itemElement, "errorMessage", "message"),
+            ReadString(itemElement, "amapStatus"),
+            ReadString(itemElement, "amapInfo"),
+            ReadString(itemElement, "errorStage"),
+            ReadString(itemElement, "errorCode"),
+            ReadString(itemElement, "errorMessage"),
             ReadString(itemElement, "rawResultSnippet"),
-            ReadString(itemElement, "conversionStatus"),
-            ReadString(itemElement, "conversionInfo"),
             ReadString(itemElement, "resultLocationKind"),
             ReadString(itemElement, "resultLongitude"),
             ReadString(itemElement, "resultLatitude"));
@@ -927,6 +1161,7 @@ public sealed class AmapCoordProjector(
             deviceCode,
             true,
             false,
+            null,
             CoordinateStateCatalog.Failed,
             "坐标转换回传解析失败",
             message,
@@ -934,11 +1169,11 @@ public sealed class AmapCoordProjector(
             null,
             null,
             null,
+            "error",
+            null,
             "item-parse",
             "payload_malformed",
             message,
-            null,
-            null,
             null,
             null,
             null,
@@ -1049,6 +1284,11 @@ public sealed class AmapCoordProjector(
         }
     }
 
+    private static bool ReadBool(JsonElement element, string propertyName)
+    {
+        return TryReadBool(element, propertyName, out var value, out _) && value;
+    }
+
     private static async Task RunOnUiAsync(Func<Task> action)
     {
         var dispatcher = System.Windows.Application.Current?.Dispatcher ?? throw new InvalidOperationException("WPF Dispatcher is not initialized.");
@@ -1071,11 +1311,35 @@ public sealed class AmapCoordProjector(
         int RequestedCount,
         int SuccessCount,
         int FailedCount,
-        int MissingCount,
         int ErrorCount,
         string TransportRootKind,
+        int RawResponseLength,
+        string RawSummary,
+        string UnwrappedSummary,
         IReadOnlyList<ProjectionPayload> Items,
         IReadOnlyList<ProjectionErrorPayload> Errors);
+
+    internal sealed record HostReadyPayload(
+        string Type,
+        string ProtocolVersion,
+        bool Ready,
+        bool ScriptLoaded,
+        bool HasAmap,
+        bool HasConvertFrom,
+        string? ErrorStage,
+        string? ErrorMessage,
+        string TransportRootKind,
+        int RawResponseLength,
+        string RawSummary,
+        string UnwrappedSummary);
+
+    internal sealed record ScriptTransportInfo(
+        string RawResponseJson,
+        string UnwrappedJson,
+        string TransportRootKind,
+        int RawResponseLength,
+        string RawSummary,
+        string UnwrappedSummary);
 
     internal sealed record ProjectionErrorPayload(string Stage, string? DeviceCode, string? ErrorCode, string Message);
 
@@ -1083,6 +1347,7 @@ public sealed class AmapCoordProjector(
         string? DeviceCode,
         bool HasRawCoordinate,
         bool HasMapCoordinate,
+        string? MapSource,
         string? CoordinateState,
         string? CoordinateStateText,
         string? CoordinateWarning,
@@ -1090,15 +1355,21 @@ public sealed class AmapCoordProjector(
         string? RawLongitude,
         string? MapLatitude,
         string? MapLongitude,
+        string? AmapStatus,
+        string? AmapInfo,
         string? ErrorStage,
         string? ErrorCode,
         string? ErrorMessage,
         string? RawResultSnippet,
-        string? ConversionStatus,
-        string? ConversionInfo,
         string? ResultLocationKind,
         string? ResultLongitude,
         string? ResultLatitude);
+
+    private sealed record ProjectionStats(
+        int RenderedCount,
+        int MissingCount,
+        int RateLimitedCount,
+        int FailedCount);
 
     private enum RawCoordinateOutcome
     {
